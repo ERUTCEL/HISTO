@@ -8,12 +8,53 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from collections import Counter
 
+import functools
+import re
+
+import analysis_engine as _engine
 from analysis_engine import analyze, default_profile
 from source_connectors import BY_ID
 from browser_links import open_web_url
 import ui_theme as ui
-from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, GREEN, ACCENT, LINE, LINE_SOFT, FIELD, HEAD,
-                      ACCENT_PALE, NEUTRAL_PALE, OK_INK, WARN_INK)
+from ui_theme import apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE
+
+
+# ── 분석 속도 개선 ──────────────────────────────────────────
+# 원본 analysis_engine.compact()/contains()는 문헌마다 같은 별칭·본문을 수백 번
+# 정규식으로 다시 정리합니다(5,000건에 약 390만 번). 결과가 입력에만 달려 있는
+# 순수 함수라서, 같은 입력의 결과를 기억해 두고 재사용합니다. 분석 결과는 같습니다.
+_WS = re.compile(r'\s+')
+_PAREN = re.compile(r'\([^()]*\)')
+_original_compact = _engine.compact
+_original_contains = _engine.contains
+
+
+@functools.lru_cache(maxsize=4096)
+def _compact_cached(value):
+    return _WS.sub('', value)
+
+
+@functools.lru_cache(maxsize=65536)
+def _contains_cached(value, alias):
+    key = _compact_cached(alias)
+    return key in _compact_cached(value) or key in _compact_cached(_PAREN.sub('', value))
+
+
+def _fast_compact(value):
+    if type(value) is str:
+        return _compact_cached(value)
+    return _original_compact(value)
+
+
+def _fast_contains(value, alias):
+    if type(alias) is str and type(value) is str:
+        return _contains_cached(value, alias)
+    return _original_contains(value, alias)
+
+
+_engine.compact = _fast_compact
+_engine.contains = _fast_contains
+
 
 STATUS = {
     'pending': '본문 미수집',
@@ -44,6 +85,8 @@ def read_results(folder, profile=None):
         raise FileNotFoundError('이 폴더에 collection.sqlite3 또는 documents.jsonl이 없습니다. 기존 수집결과 폴더를 선택하세요.')
     for row in rows:
         row['analysis'] = analyze(row, profile)
+        row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
+                                    str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
     return rows, profile
 
@@ -191,7 +234,6 @@ class ResultsWindow(tk.Toplevel):
         self.threshold = tk.StringVar(value='전체 후보')
         self.source_filter = tk.StringVar(value='모든 자료원')
         self.info = tk.StringVar()
-        self.folder_text = tk.StringVar()
 
         top = tk.Frame(self, bg=CARD)
         top.pack(fill='x')
@@ -203,7 +245,7 @@ class ResultsWindow(tk.Toplevel):
         trow.pack(anchor='w')
         ttk.Button(trow, text='←  연구실로', style='Quiet.TButton', command=self.go_back, cursor='hand2').pack(side='left', padx=(0, px(10)))
         tk.Label(trow, text='문헌 결과', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
-        self.bind('<Escape>', lambda e: self.go_back())
+        self.bind('<Escape>', self._on_escape)
         self.bind('<Alt-Left>', lambda e: self.go_back())
         tk.Label(titles, textvariable=self.info, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
                  justify='left').pack(anchor='w', pady=(px(3), 0))
@@ -213,7 +255,8 @@ class ResultsWindow(tk.Toplevel):
         controls = tk.Frame(top, bg=CARD)
         controls.pack(fill='x', padx=px(28), pady=(px(14), px(16)))
         tk.Label(controls, text='찾기', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
-        ttk.Entry(controls, textvariable=self.query, width=24).pack(side='left', padx=(0, px(10)))
+        self.query_entry = ttk.Entry(controls, textvariable=self.query, width=24)
+        self.query_entry.pack(side='left', padx=(0, px(10)))
         self.source_box = ttk.Combobox(controls, textvariable=self.source_filter, state='readonly', width=13,
                                        values=['모든 자료원'] + [s.short for s in BY_ID.values()])
         self.source_box.pack(side='left', padx=(0, px(6)))
@@ -234,7 +277,8 @@ class ResultsWindow(tk.Toplevel):
         ttk.Button(buttons, text='선택 문헌 본문 받기', style='Primary.TButton', command=self.collect_selected, cursor='hand2').pack(side='left')
         ttk.Button(buttons, text='관계 후보 지도', style='Large.TButton', cursor='hand2',
                    command=lambda: RelationsWindow(self, self.filtered)).pack(side='left', padx=(px(8), 0))
-        ttk.Button(buttons, text='원문 주소 복사', style='Large.TButton', command=self.copy_url, cursor='hand2').pack(side='left', padx=(px(8), 0))
+        self.copy_button = ttk.Button(buttons, text='원문 주소 복사', style='Large.TButton', command=self.copy_url, cursor='hand2')
+        self.copy_button.pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='공식 원문 ↗', style='Outline.TButton', command=self.open_original, cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
         tk.Label(buttons, text='점수·분류는 검토용 규칙 기반 후보입니다. 빠른 검색은 일부 결과이며 낮은 점수도 관련 문헌일 수 있습니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='right', wraplength=px(360)).pack(side='right')
@@ -255,6 +299,8 @@ class ResultsWindow(tk.Toplevel):
         scroll.pack(side='right', fill='y')
         self.tree.pack(side='left', fill='both', expand=True)
         self.tree.bind('<<TreeviewSelect>>', self.show_selected)
+        self.tree.tag_configure('even', background=CARD)
+        self.tree.tag_configure('odd', background='#FBFAF7')
 
         lower = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         split.add(lower, weight=4)
@@ -272,6 +318,12 @@ class ResultsWindow(tk.Toplevel):
         if event.width > px(400) and not getattr(self, '_sash_done', False):
             self._sash_done = True
             self.after_idle(lambda: self._split.sashpos(0, int(event.width * 0.58)))
+
+    def _on_escape(self, event=None):
+        if self.focus_get() is self.query_entry and self.query.get():
+            self.query.set('')
+            return
+        self.go_back()
 
     def go_back(self):
         # 결과 창을 닫고 메인 연구실 창으로 돌아갑니다.
@@ -292,6 +344,7 @@ class ResultsWindow(tk.Toplevel):
             children = self.tree.get_children()
             if children:
                 self.tree.delete(*children)
+            self.period_box.configure(values=['모든 연대'])
             self._write_detail([(str(exc), 'note')])
             self.info.set(str(exc))
             return
@@ -305,27 +358,29 @@ class ResultsWindow(tk.Toplevel):
 
     def filter_rows(self):
         self._timer = None
+        keep = {r.get('key') for r in self.selected()}  # 새로고침·필터 후에도 보던 문헌 선택 유지
         query = self.query.get().casefold().strip()
         minimum = {'전체 후보': -10000, '60점 이상': 60, '80점 이상': 80}[self.threshold.get()]
+        facet, period, source = self.facet.get(), self.period.get(), self.source_filter.get()
+        wanted = None
+        if source != '모든 자료원':
+            wanted = next((s.id for s in BY_ID.values() if s.short == source), None)
         self.filtered = []
         for row in self.rows:
             a = row['analysis']
-            if self.source_filter.get() != '모든 자료원':
-                selected = next((s.id for s in BY_ID.values() if s.short == self.source_filter.get()), None)
-                origins = row.get('source_ids', ['history' if row.get('kind') == 'db' else row.get('kind')])
-                origins = ['history' if key == 'db' else key for key in origins]
-                if selected not in origins:
+            if wanted is not None:
+                origins = row.get('source_ids') or ['history' if row.get('kind') == 'db' else row.get('kind')]
+                if wanted not in ('history' if key == 'db' else key for key in origins):
                     continue
             if a['score'] < minimum:
                 continue
-            if self.facet.get() == '미분류' and a['facets']:
+            if facet == '미분류' and a['facets']:
                 continue
-            if self.facet.get() not in ('모든 관점', '미분류') and self.facet.get() not in a['facets']:
+            if facet not in ('모든 관점', '미분류') and facet not in a['facets']:
                 continue
-            if self.period.get() != '모든 연대' and a['period'] != self.period.get():
+            if period != '모든 연대' and a['period'] != period:
                 continue
-            if query and query not in '\n'.join([row.get('title', ''), row.get('body', ''), row.get('snippet', ''),
-                                                  row.get('source', '')]).casefold():
+            if query and query not in row.get('_search', ''):
                 continue
             self.filtered.append(row)
         children = self.tree.get_children()
@@ -335,15 +390,16 @@ class ResultsWindow(tk.Toplevel):
         for i, row in self.shown.items():
             a = row['analysis']
             self.tree.insert('', 'end', iid=i, tags=('even' if int(i) % 2 == 0 else 'odd',),
-                             values=(a['score'], row['title'], row.get('source', ''), ', '.join(a['facets']) or '미분류',
-                                     a['year'] or '미상', STATUS.get(row.get('status'), row.get('status', ''))))
-        self.tree.tag_configure('even', background=CARD)
-        self.tree.tag_configure('odd', background='#FBFAF7')
+                             values=(a['score'], row.get('title', '(제목 없음)'), row.get('source', ''),
+                                     ', '.join(a['facets']) or '미분류', a['year'] or '미상',
+                                     STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 / 필터 {len(self.filtered)}건 / 화면 {len(self.shown)}건 · 관련성 점수순'
                       '  ·  분류 후보(복수 태그): ' + ' · '.join(f'{name} {counts[name]}건' for name in ('정치사', '사회사', '제도사')))
         if self.shown:
-            self.tree.selection_set('0')
+            again = [i for i, row in self.shown.items() if keep and row.get('key') in keep]
+            self.tree.selection_set(again or ['0'])
+            self.tree.see((again or ['0'])[0])
             self.show_selected()
         else:
             self._write_detail([('현재 조건에 해당하는 자료가 없습니다.', 'note')])
@@ -370,7 +426,7 @@ class ResultsWindow(tk.Toplevel):
             (f" {', '.join(a['facets']) or '미분류'} ", 'chip2'), ('  ', None),
             (f" {a['year'] or '연대 미상'} ", 'chip2'), ('  ', None),
             (f" {status} ", 'chip2'), ('\n', 'meta'),
-            (row['title'] + '\n', 'title'),
+            (row.get('title', '(제목 없음)') + '\n', 'title'),
             (row.get('source', '') + '\n', 'meta'),
             (row.get('url', '') + '\n', 'link'),
             ('점수 근거 — 확률 아님\n', 'head'),
@@ -394,6 +450,8 @@ class ResultsWindow(tk.Toplevel):
         if rows:
             self.clipboard_clear()
             self.clipboard_append('\n'.join(r.get('url', '') for r in rows))
+            self.copy_button.configure(text=f'복사됨 ✓ ({len(rows)}건)')
+            self.after(1600, lambda: self.copy_button.winfo_exists() and self.copy_button.configure(text='원문 주소 복사'))
 
     def collect_selected(self):
         rows = self.selected()
@@ -419,7 +477,7 @@ class ResultsWindow(tk.Toplevel):
     def choose_folder(self):
         folder = filedialog.askdirectory(parent=self, title='기존 수집결과 폴더 선택', initialdir=self.folder)
         if folder:
-            self.folder = Path(folder)
+            self.folder = Path(folder).resolve()
             self.reload()
 
     def open_folder(self):

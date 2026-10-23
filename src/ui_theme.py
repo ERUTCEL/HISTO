@@ -172,7 +172,14 @@ def semi(root, name, size):
     return _font(root, name, FAMILY, size, 'bold')
 
 
+_THEMED = set()
+
+
 def apply_theme(root):
+    # 스타일·글꼴은 프로그램 전체가 공유합니다. 결과 창 등 새 창을 열 때마다 다시 만들지 않습니다.
+    if str(root.tk) in _THEMED:
+        root.configure(bg=BG)
+        return ttk.Style(root)
     global SCALE
     try:
         SCALE = max(1.0, root.winfo_fpixels('1i') / 96.0) if os.name == 'nt' else 1.0
@@ -353,6 +360,7 @@ def apply_theme(root):
     style.configure('TPanedwindow', background=BG)
     style.configure('Sash', sashthickness=px(12), background=BG, bordercolor=BG, lightcolor=BG, darkcolor=BG, gripcount=0)
     _install_ime_font(root)
+    _THEMED.add(str(root.tk))
     return style
 
 

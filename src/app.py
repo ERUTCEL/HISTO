@@ -9,14 +9,13 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import traceback
 import sqlite3
-import time
 import collector
 from analysis_engine import default_profile, profile_for_target
 from result_viewer import ResultsWindow, RelationsWindow
 from source_connectors import SOURCES, BY_ID, AUTO_IDS
 from browser_links import open_web_url
 import ui_theme as ui
-from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_SOFT, LINE_STRONG,
+from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
                       NAV_MUTED, NAV_LINE)
 
@@ -490,9 +489,12 @@ class App(tk.Tk):
             self.recent.delete(child)
         labels = {'catalog': '서지·요약', 'complete': '본문 저장', 'pending': '본문 미수집', 'failed': '오류'}
         for i, (data, status) in enumerate(rows):
-            row = json.loads(data)
+            try:
+                row = json.loads(data)
+            except (TypeError, ValueError):
+                row = {}
             self.recent.insert('', 'end', tags=('odd' if i % 2 else 'even',),
-                               values=(row['title'], row.get('source', ''), labels.get(status, status)))
+                               values=(row.get('title', '(제목 없음)'), row.get('source', ''), labels.get(status, status)))
         if rows:
             self.library_empty.place_forget()
         else:
@@ -513,7 +515,7 @@ class App(tk.Tk):
         self.mode_hint.set(MODE_HINTS.get(self.mode.get(), ''))
         profile = profile_for_target(self.target.get())
         current = self.terms.get('1.0', 'end').strip().splitlines()
-        broad = json.loads((ROOT / 'queries.json').read_text(encoding='utf-8'))['terms']
+        broad = self._broad_terms()
         if self.mode.get() == '전체 수집 / 이어받기':
             if profile['target'] == '숙빈 최씨' and current == profile['quick_terms']:
                 self.terms.delete('1.0', 'end')
@@ -526,10 +528,18 @@ class App(tk.Tk):
         elif self.mode.get() == '우선 본문 (최대 30건)':
             self.state.set('저장된 목록에서 60점 이상 후보를 점수순으로 최대 30건 받습니다. 누락 후보는 결과 보기에서 직접 선택할 수 있습니다.')
 
+    def _broad_terms(self):
+        if not hasattr(self, '_broad'):
+            try:
+                self._broad = json.loads((ROOT / 'queries.json').read_text(encoding='utf-8'))['terms']
+            except (OSError, ValueError, KeyError):
+                self._broad = []
+        return self._broad
+
     def choose(self):
         if self.running:
             return
-        folder = filedialog.askdirectory(initialdir=self.output.get())
+        folder = filedialog.askdirectory(parent=self, initialdir=self.output.get())
         if folder:
             self.output.set(folder)
             self.stats['records'].set('0')
@@ -551,11 +561,11 @@ class App(tk.Tk):
             return
         terms = [x.strip() for x in self.terms.get('1.0', 'end').splitlines() if x.strip()]
         if not terms:
-            messagebox.showerror('검색어', '검색어를 한 개 이상 입력하세요.')
+            messagebox.showerror('검색어', '검색어를 한 개 이상 입력하세요.', parent=self)
             return
         sources = self.selected_sources()
         if not sources and self.mode.get() not in ('본문 이어받기', '우선 본문 (최대 30건)'):
-            messagebox.showinfo('자료원 선택', '자료원 연결에서 통합 검색할 사이트를 한 곳 이상 선택하세요.')
+            messagebox.showinfo('자료원 선택', '자료원 연결에서 통합 검색할 사이트를 한 곳 이상 선택하세요.', parent=self)
             self.show_page('sources')
             return
         out = Path(self.output.get()).resolve()
@@ -569,7 +579,7 @@ class App(tk.Tk):
             except (ValueError, OSError):
                 pass
         if not profile['target'].strip():
-            messagebox.showerror('분석 대상', '분석 대상 이름을 입력하세요.')
+            messagebox.showerror('분석 대상', '분석 대상 이름을 입력하세요.', parent=self)
             return
         try:
             out.mkdir(parents=True, exist_ok=True)
@@ -596,7 +606,7 @@ class App(tk.Tk):
                 selected_file.write_text(json.dumps(selected, ensure_ascii=False), encoding='utf-8')
                 cmd += ['--selected-keys', str(selected_file)]
         except Exception as exc:
-            messagebox.showerror('실행 실패', str(exc))
+            messagebox.showerror('실행 실패', str(exc), parent=self)
             return
         self.active_out = out
         self.running = True
@@ -614,37 +624,69 @@ class App(tk.Tk):
             result = 1
         self.events.put(('done', result))
 
+    LOG_LIMIT = 4000  # 진행 기록 창에 남길 최대 줄 수
+
     def poll(self):
+        logs, done = [], None
         try:
-            while True:
+            for _ in range(500):
                 kind, value = self.events.get_nowait()
                 if kind == 'log':
-                    self.log.configure(state='normal')
-                    self.log.insert('end', value)
-                    self.log.see('end')
-                    self.log.configure(state='disabled')
-                    if '목록 저장됨' in value:
-                        self.refresh_counts()
+                    logs.append(value)
                 else:
-                    self.running = False
-                    self._set_inputs(True)
-                    self._set_busy(False)
-                    self.refresh_counts()
-                    report = self.active_out / 'report.json'
-                    if report.exists():
-                        d = json.loads(report.read_text(encoding='utf-8'))
-                        prefix = '빠른 예비 검색' if d.get('quick') else '실행 종료'
-                        self.state.set(f"{prefix}: 문헌 {d['unique_records']}건 · 서지 {d.get('catalog_count', 0)}건 · "
-                                       f"본문 {d['downloaded']}건 / 요청 {d.get('http_requests', '?')}회. 문헌 결과 보기에서 확인하세요.")
-                    else:
-                        self.state.set('실행이 종료되었습니다. 로그를 확인하세요.')
+                    done = value
+                    break
         except queue.Empty:
             pass
-        self.after(150, self.poll)
+        try:
+            if logs:
+                self._append_log(''.join(logs))
+            if done is not None:
+                self._finish_run()
+        except Exception:
+            traceback.print_exc()
+        finally:
+            self.after(150, self.poll)
+
+    def _append_log(self, text):
+        at_end = self.log.yview()[1] >= 0.999
+        self.log.configure(state='normal')
+        self.log.insert('end', text)
+        lines = int(self.log.index('end-1c').split('.')[0])
+        if lines > self.LOG_LIMIT:
+            self.log.delete('1.0', f'{lines - self.LOG_LIMIT}.0')
+        if at_end:
+            self.log.see('end')
+        self.log.configure(state='disabled')
+        if '목록 저장됨' in text:
+            self.refresh_counts()
+
+    def _finish_run(self):
+        self.running = False
+        self._set_inputs(True)
+        self._set_busy(False)
+        self.refresh_counts()
+        report = self.active_out / 'report.json'
+        try:
+            d = json.loads(report.read_text(encoding='utf-8'))
+            prefix = '빠른 예비 검색' if d.get('quick') else '실행 종료'
+            self.state.set(f"{prefix}: 문헌 {d.get('unique_records', 0)}건 · 서지 {d.get('catalog_count', 0)}건 · "
+                           f"본문 {d.get('downloaded', 0)}건 / 요청 {d.get('http_requests', '?')}회. 문헌 결과 보기에서 확인하세요.")
+        except (OSError, ValueError, AttributeError):
+            self.state.set('실행이 종료되었습니다. 로그를 확인하세요.')
+        window = getattr(self, 'result_window', None)
+        if window is not None and window.winfo_exists() and Path(window.folder) == Path(self.active_out):
+            window.reload()  # 열려 있는 결과 창에 새로 받은 본문을 바로 반영
+        if getattr(self, '_close_after_stop', False):
+            self.destroy()
 
     def stop(self):
         if self.running:
-            self.stop_file.write_text('stop', encoding='utf-8')
+            try:
+                self.stop_file.write_text('stop', encoding='utf-8')
+            except OSError as exc:
+                messagebox.showerror('중단', f'중단 요청을 저장하지 못했습니다.\n{exc}', parent=self)
+                return
             self.state.set('현재 요청이 끝나면 저장 후 중단합니다. 창을 잠시 열어 두세요.')
 
     def view(self):
@@ -657,11 +699,20 @@ class App(tk.Tk):
             folder = Path(chosen)
             if not self.running:
                 self.output.set(str(folder))
+        window = getattr(self, 'result_window', None)
+        if window is not None and window.winfo_exists():
+            if Path(window.folder) == folder.resolve():
+                window.deiconify()
+                window.lift()
+                window.focus_force()
+                return
+            window.destroy()
         self.result_window = ResultsWindow(self, folder, on_collect=self.collect_selected)
 
     def collect_selected(self, folder, keys, profile):
         if self.running:
-            messagebox.showinfo('수집 중', '현재 실행이 끝나거나 중단 후 저장한 다음 선택 문헌을 받을 수 있습니다.')
+            messagebox.showinfo('수집 중', '현재 실행이 끝나거나 중단 후 저장한 다음 선택 문헌을 받을 수 있습니다.',
+                                parent=getattr(self, 'result_window', None) or self)
             return
         self.output.set(str(folder))
         self.target.set(profile['target'])
@@ -671,7 +722,12 @@ class App(tk.Tk):
 
     def close(self):
         if self.running:
-            self.stop()
+            if getattr(self, '_close_after_stop', False):
+                return
+            if messagebox.askyesno('수집 중', '수집이 진행 중입니다.\n지금까지 받은 내용을 저장하고 끝나면 창을 닫을까요?', parent=self):
+                self._close_after_stop = True
+                self.stop()
+                self.state.set('저장 후 창을 닫습니다. 현재 요청이 끝날 때까지 잠시 기다려 주세요.')
             return
         self.destroy()
 
