@@ -395,6 +395,50 @@ class TopicLabels:
             if name not in t['labels']:
                 t['labels'].append(name)
         self.labels, self.docs = t['labels'], t['docs']
+        self.extra = t.setdefault('tasks', {})
+        self.extra.setdefault('자료 유형', {'labels': ['상소', '전교', '계사', '논의'], 'docs': {}})
+
+    # ── 여러 과제(7강): '주제'는 위의 labels/docs, 나머지는 tasks 아래 ──
+    def task_names(self):
+        return ['주제'] + list(self.extra)
+
+    def task_labels(self, task):
+        return self.labels if task == '주제' else self.extra[task]['labels']
+
+    def task_docs(self, task):
+        return self.docs if task == '주제' else self.extra[task]['docs']
+
+    def task_get(self, task, key):
+        item = self.task_docs(task).get(key)
+        return set(item['topics']) if item else None
+
+    def task_set(self, task, key, topics, title=''):
+        if task == '주제':
+            return self.set(key, topics, title)
+        docs = self.task_docs(task)
+        if topics is None:
+            docs.pop(key, None)
+        else:
+            docs[key] = {'topics': sorted(topics), 'at': datetime.now().isoformat(timespec='seconds'), 'title': title}
+        self.save()
+
+    def add_task(self, name, labels):
+        name = name.strip()
+        labels = [l.strip() for l in labels if l.strip()]
+        if not name or name in self.task_names() or len(labels) < 2:
+            return False
+        self.extra[name] = {'labels': labels, 'docs': {}}
+        self.save()
+        return True
+
+    def add_task_label(self, task, label):
+        labels = self.task_labels(task)
+        label = label.strip()
+        if label and label not in labels:
+            labels.append(label)
+            self.save()
+            return True
+        return False
 
     def get(self, key):
         item = self.docs.get(key)
@@ -422,10 +466,12 @@ class TopicLabels:
             tmp.replace(self.path)
             with open(self.path.with_suffix('.csv'), 'w', encoding='utf-8-sig', newline='') as f:
                 w = csv.writer(f)
-                w.writerow(['대상', '문헌 키', '주제(연구자 주석)', '주석 시각', '제목'])
+                w.writerow(['대상', '과제', '문헌 키', '라벨(연구자 주석)', '주석 시각', '제목'])
                 for target, t in self.data['targets'].items():
-                    for key, v in t['docs'].items():
-                        w.writerow([target, key, ' · '.join(v['topics']) or '(해당 없음)', v.get('at', ''), v.get('title', '')])
+                    tasks = [('주제', t['docs'])] + [(n, v['docs']) for n, v in t.get('tasks', {}).items()]
+                    for task, docs in tasks:
+                        for key, v in docs.items():
+                            w.writerow([target, task, key, ' · '.join(v['topics']) or '(해당 없음)', v.get('at', ''), v.get('title', '')])
         except OSError:
             pass
 

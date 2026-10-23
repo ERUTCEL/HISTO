@@ -4,6 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import mtl
 import textlab as tl
 import ui_theme as ui
 from ui_theme import apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, OK_INK
@@ -85,7 +86,8 @@ class TextLabWindow(tk.Toplevel):
         self.book.pack(fill='both', expand=True, padx=px(20), pady=px(14))
         self.tabs = {}
         for key, label in (('search', '유사 검색 · TF-IDF'), ('words', '어휘 관계 · PMI·SVD'),
-                           ('context', '문맥 용례'), ('topics', '주제 분류 · 준지도 학습')):
+                           ('context', '문맥 용례'), ('topics', '주제 분류 · 준지도 학습'),
+                           ('mtl', '여러 작업 동시 학습 · MMoE'), ('domain', '시대·출처 적응')):
             frame = tk.Frame(self.book, bg=BG, padx=px(16), pady=px(14))
             self.book.add(frame, text=label)
             self.tabs[key] = frame
@@ -93,6 +95,8 @@ class TextLabWindow(tk.Toplevel):
         self._build_words(self.tabs['words'])
         self._build_context(self.tabs['context'])
         self._build_topics(self.tabs['topics'])
+        self._build_mtl(self.tabs['mtl'])
+        self._build_domain(self.tabs['domain'])
         self.book.bind('<<NotebookTabChanged>>', self._tab_changed)
         self.show(tab)
 
@@ -391,3 +395,181 @@ class TextLabWindow(tk.Toplevel):
             messagebox.showerror('예측 결과 저장', str(exc), parent=self)
             return
         self.topic_note.configure(text=f'저장했습니다: {path}', fg=OK_INK)
+
+    # ── 7강: 여러 작업 동시 학습 ──
+
+    def _specs(self):
+        res = self.results
+        store = res.topics
+        specs = []
+        for task in store.task_names():
+            strong = {k: store.task_get(task, k) for k in store.task_docs(task) if res.row_by_key(k)}
+            if task == '주제':
+                weak = {r.get('key'): set(r['analysis'].get('facets', {})) for r in res.rows}
+            elif task == '자료 유형':
+                weak = {r.get('key'): mtl.rule_types(r) for r in res.rows}
+            else:
+                weak = None
+            specs.append(mtl.TaskSpec(task, store.task_labels(task), strong, weak))
+        return specs
+
+    def _encoder(self):
+        res = self.results
+        if getattr(res, 'encoder', None) is None or res.encoder.index is not res.ensure_index():
+            res.encoder = mtl.DenseEncoder(res.ensure_index(), 32)
+        return res.encoder
+
+    def _build_mtl(self, page):
+        _note(page, '하나의 사료에서 주제 · 자료 유형 · 직접 만든 과제(예: 정치적 입장)를 함께 학습합니다. '
+                    '공유 전문가 3개 위에 과제마다 게이트가 있어, 과제가 필요한 전문가를 골라 씁니다(MMoE). '
+                    '과제 사이 학습 신호 크기는 GradNorm 방식으로 맞춥니다. 같은 교차검증으로 과제별 단독 모델 · 공유 하단 · MMoE를 비교해, '
+                    '단독보다 나빠지는 과제(부정적 전이)를 표시합니다.').pack(fill='x')
+        row = tk.Frame(page, bg=BG)
+        row.pack(fill='x', pady=(px(10), px(6)))
+        ttk.Button(row, text='비교 실행', style='Primary.TButton', command=self.run_mtl, cursor='hand2').pack(side='left')
+        tk.Label(row, text='새 과제', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(18), px(6)))
+        self.task_name = tk.StringVar(value='정치적 입장')
+        ttk.Entry(row, textvariable=self.task_name, width=12).pack(side='left')
+        tk.Label(row, text='라벨(쉼표로)', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(8), px(6)))
+        self.task_labels = tk.StringVar(value='찬성, 반대, 중립')
+        ttk.Entry(row, textvariable=self.task_labels, width=20).pack(side='left')
+        ttk.Button(row, text='과제 추가', command=self.add_task, cursor='hand2').pack(side='left', padx=(px(6), 0))
+        self.mtl_summary = tk.StringVar(value='')
+        tk.Label(page, textvariable=self.mtl_summary, bg=BG, fg=INK, font=ui.FONTS['label'], anchor='w', justify='left').pack(fill='x', pady=(px(6), 0))
+        frame, self.mtl_tree = _table(page, [('task', '과제', 120), ('n', '주석 수', 70), ('single', '단독 F1', 80),
+                                             ('shared', '공유 하단 F1', 90), ('mmoe', 'MMoE F1', 80),
+                                             ('lam', 'GradNorm 가중', 100), ('gate', '쓰는 전문가(게이트 평균)', 220),
+                                             ('verdict', '판정', 200)], height=6)
+        frame.pack(fill='x', pady=(px(8), 0))
+        _note(page, '과제별 주석은 결과 창 오른쪽 주석 줄의 과제 선택(주제 ▾)에서 바꿔 답니다. 과제마다 주석이 있는 문헌만 평가에 씁니다. '
+                    '자료 유형은 서식 낱말(상소·전교·계사·의논 등) 규칙을 약한 라벨로 함께 씁니다. '
+                    '주석 수가 적으면 차이가 우연일 수 있으니 ±0.02 안의 차이는 같다고 보세요.').pack(anchor='w', fill='x', pady=(px(8), 0))
+        self._mtl_rows()
+
+    def _mtl_rows(self, result=None):
+        specs = self._specs()
+        rows = []
+        by = {r['task']: r for r in (result or {}).get('tasks', [])}
+        for sp in specs:
+            r = by.get(sp.name)
+            gate = ''
+            if result and result.get('gates') and sp.name in result['gates']:
+                gate = '  '.join(f'E{i + 1} {v:.2f}' for i, v in enumerate(result['gates'][sp.name]))
+            if r:
+                best = max(r['single'], r['shared'], r['mmoe'])
+                if r['negative']:
+                    verdict = '⚠ 부정적 전이: 단독 모델 권장'
+                elif r['mmoe'] >= r['single'] + 0.02:
+                    verdict = '함께 학습이 도움'
+                else:
+                    verdict = '차이 없음(±0.02)'
+                rows.append((sp.name, len(sp.strong), f"{r['single']:.2f}", f"{r['shared']:.2f}", f"{r['mmoe']:.2f}",
+                             f"{result.get('lam', {}).get(sp.name, 1.0):.2f}", gate, verdict if best > 0 else '평가 불가'))
+            else:
+                rows.append((sp.name, len(sp.strong), '–', '–', '–', '–', gate, ''))
+        _fill(self.mtl_tree, rows)
+
+    def add_task(self):
+        labels = [x for x in self.task_labels.get().replace('·', ',').split(',')]
+        if self.results.topics.add_task(self.task_name.get(), labels):
+            self.results.refresh_topic_bar()
+            self._mtl_rows()
+            self.domain_task.configure(values=self.results.topics.task_names())
+            self.mtl_summary.set(f'과제 「{self.task_name.get().strip()}」를 추가했습니다. 결과 창 주석 줄에서 과제를 바꿔 주석하세요.')
+        else:
+            messagebox.showinfo('과제 추가', '과제 이름이 비었거나 이미 있습니다. 라벨은 2개 이상 쉼표로 적어 주세요.', parent=self)
+
+    def run_mtl(self):
+        specs = [sp for sp in self._specs() if sp.strong or sp.weak]
+        annotated = {k for sp in specs for k in sp.strong}
+        if len(specs) < 2 or len(annotated) < 6:
+            messagebox.showinfo('여러 작업 동시 학습', '과제 2개 이상, 주석한 문헌 6건 이상이 필요합니다.', parent=self)
+            return
+        enc = self._encoder()
+        keys = [r.get('key') for r in self.results.rows]
+        self.status.set('여러 작업 동시 학습 비교 중… (과제별 단독 · 공유 하단 · MMoE, 3겹 교차검증)')
+        self.mtl_summary.set('계산 중…')
+
+        def done(result):
+            if not result:
+                self.mtl_summary.set('주석이 부족해 비교하지 못했습니다.')
+                return
+            neg = [r['task'] for r in result['tasks'] if r['negative']]
+            self.mtl_summary.set(f"주석 {result['n']}건으로 비교했습니다. "
+                                 + (f"부정적 전이: {', '.join(neg)} — 이 과제는 따로 학습하세요." if neg else '부정적 전이는 보이지 않습니다.'))
+            self._mtl_rows(result)
+            self.status.set('여러 작업 동시 학습 비교를 마쳤습니다.')
+        run_background(self, lambda: mtl.compare_mtl(enc, specs, keys), done)
+
+    # ── 8강: 시대·출처 적응 ──
+
+    def _build_domain(self, page):
+        _note(page, '먼저 측정합니다: 도메인(시대 또는 자료집)마다, 그 도메인 주석으로 학습했을 때(참고)와 다른 도메인으로만 학습했을 때의 성능을 비교해 '
+                    '실제로 성능이 떨어지는지 봅니다. A-거리는 두 도메인의 낱말 분포가 얼마나 다른지(0 같음 ~ 2 완전히 다름)입니다. '
+                    '그다음 적응 기법을 비교합니다 — 재가중: 목표 도메인과 비슷한 학습 예를 더 중요하게 / GRL: 도메인 판별기의 기울기를 뒤집어 '
+                    '도메인에 덜 의존하는 표현을 학습. 목표 도메인의 주석은 평가에만 쓰고, 학습에는 본문(라벨 없음)만 씁니다.').pack(fill='x')
+        row = tk.Frame(page, bg=BG)
+        row.pack(fill='x', pady=(px(10), px(6)))
+        tk.Label(row, text='도메인', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(6)))
+        self.domain_axis = tk.StringVar(value='시대')
+        ttk.Combobox(row, textvariable=self.domain_axis, values=['시대', '자료집'], state='readonly', width=8).pack(side='left')
+        tk.Label(row, text='과제', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(12), px(6)))
+        self.domain_task_var = tk.StringVar(value='주제')
+        self.domain_task = ttk.Combobox(row, textvariable=self.domain_task_var, values=self.results.topics.task_names(),
+                                        state='readonly', width=10)
+        self.domain_task.pack(side='left')
+        ttk.Button(row, text='측정 · 적응 비교', style='Primary.TButton', command=self.run_domain, cursor='hand2').pack(side='left', padx=(px(10), 0))
+        self.domain_summary = tk.StringVar(value='')
+        tk.Label(page, textvariable=self.domain_summary, bg=BG, fg=INK, font=ui.FONTS['label'], anchor='w', justify='left').pack(fill='x', pady=(px(6), 0))
+        frame, self.domain_tree = _table(page, [('domain', '목표 도메인', 110), ('n', '문헌', 60), ('eval', '평가 주석', 70),
+                                                ('a', 'A-거리', 70), ('in', '도메인 안(참고)', 100), ('src', '다른 도메인만', 100),
+                                                ('rew', '+재가중', 80), ('grl', '+GRL', 80), ('note', '점검', 240)], height=7)
+        frame.pack(fill='x', pady=(px(8), 0))
+        warn = tk.Label(page, bg=BG, fg='#9A2F1F', font=ui.FONTS['small'], justify='left', anchor='w',
+                        text='주의: 시대에 따른 용어·문체 차이가 연구 대상 자체라면, 그 차이를 지우는 적응(특히 GRL)은 쓰지 마세요. '
+                             '적응 뒤 라벨별 성능이 떨어지면(서로 다른 주제가 섞였다는 신호) \'점검\' 칸에 표시합니다. '
+                             '평가 주석이 10건 미만인 도메인의 숫자는 흔들릴 수 있습니다.')
+        warn.pack(anchor='w', fill='x', pady=(px(8), 0))
+        warn.bind('<Configure>', lambda e: warn.configure(wraplength=max(px(200), e.width - px(4))))
+
+    def run_domain(self):
+        specs = {sp.name: sp for sp in self._specs()}
+        spec = specs.get(self.domain_task_var.get())
+        if spec is None or len(spec.strong) < 6:
+            messagebox.showinfo('시대·출처 적응', '이 과제의 주석이 6건 이상 필요합니다(도메인마다 6건 이상 있어야 그 도메인을 평가합니다).', parent=self)
+            return
+        enc = self._encoder()
+        rows = list(self.results.rows)
+        axis = self.domain_axis.get()
+        self.status.set(f'{axis}별 도메인 차이 측정 · 적응 비교 중… (도메인마다 모델 4개 학습)')
+        self.domain_summary.set('계산 중…')
+
+        def done(rep):
+            items = rep['domains']
+            rows_out = []
+            for d in items:
+                drop = d['in_domain'] - d['source_only']
+                best = max(('재가중', d['reweight']), ('GRL', d['grl']), key=lambda x: x[1])
+                notes = []
+                if drop >= 0.05:
+                    notes.append(f'다른 도메인 학습 시 −{drop:.2f}')
+                if best[1] >= d['source_only'] + 0.02:
+                    notes.append(f'{best[0]} +{best[1] - d["source_only"]:.2f}')
+                elif max(d['reweight'], d['grl']) < d['source_only'] - 0.02:
+                    notes.append('적응이 오히려 나쁨')
+                if d['hurt_labels']:
+                    notes.append('⚠ 라벨 성능 하락: ' + ', '.join(d['hurt_labels']))
+                if d['n_eval'] < 10:
+                    notes.append('주석 적음')
+                rows_out.append((d['domain'], d['n_target'], d['n_eval'], f"{d['a_distance']:.2f}" if d['a_distance'] is not None else '–',
+                                 f"{d['in_domain']:.2f}", f"{d['source_only']:.2f}", f"{d['reweight']:.2f}", f"{d['grl']:.2f}",
+                                 ' · '.join(notes) or '차이 없음'))
+            _fill(self.domain_tree, rows_out)
+            if not items:
+                self.domain_summary.set('주석이 6건 이상인 도메인이 없어 평가하지 못했습니다. 도메인마다 주석을 더 다세요.')
+            else:
+                shifted = [d['domain'] for d in items if d['in_domain'] - d['source_only'] >= 0.05]
+                self.domain_summary.set((f"성능 저하 확인: {', '.join(shifted)}. 적응 기법 결과를 비교해 보세요." if shifted
+                                         else '다른 도메인으로 학습해도 성능 저하가 뚜렷하지 않습니다. 적응이 필요 없어 보입니다.'))
+            self.status.set('시대·출처 적응 비교를 마쳤습니다.')
+        run_background(self, lambda: mtl.adaptation_report(enc, rows, spec, axis), done)

@@ -17,6 +17,7 @@ from source_connectors import BY_ID
 from browser_links import open_web_url
 import ranker
 import textlab as tl
+import mtl
 from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
@@ -253,6 +254,7 @@ class ResultsWindow(tk.Toplevel):
         self.classifier = None
         self._by_key = {}
         self.lab = None
+        self.annot_task = tk.StringVar(value='주제')
 
         top = tk.Frame(self, bg=CARD)
         top.pack(fill='x')
@@ -511,25 +513,31 @@ class ResultsWindow(tk.Toplevel):
             w.destroy()
         if self.topics is None:
             return
+        tasks = self.topics.task_names()
+        if self.annot_task.get() not in tasks:
+            self.annot_task.set('주제')
+        task = self.annot_task.get()
         row = row or (self.selected() or [None])[0]
         key = row.get('key') if row else None
-        ann = self.topics.get(key) if key else None
-        rule = set(row['analysis'].get('facets', {})) if row else set()
-        probs = self.classifier.probs.get(key, {}) if (self.classifier and key) else {}
+        ann = self.topics.task_get(task, key) if key else None
+        rule, probs = self._suggest(task, row)
         top = tk.Frame(bar, bg=HEAD)
         top.pack(fill='x', padx=(px(14), px(10)), pady=(px(6), 0))
-        tk.Label(top, text='주제 ✎ 주석됨' if ann is not None else '주제 (미주석 · 괄호는 규칙/모델 확률)', bg=HEAD,
+        box = ttk.Combobox(top, textvariable=self.annot_task, values=tasks, state='readonly', width=10)
+        box.pack(side='left')
+        box.bind('<<ComboboxSelected>>', lambda e: self.refresh_topic_bar())
+        tk.Label(top, text=' ✎ 주석됨' if ann is not None else ' 미주석 · 괄호는 규칙/모델', bg=HEAD,
                  fg=ACCENT if ann is not None else MUTED, font=ui.FONTS['label_sm']).pack(side='left')
         if key:
             for text, command in (('지우기', lambda: self.save_topics(clear=True)), ('해당 없음', self.no_topics),
-                                  ('제안대로 주석', self.accept_topics)):
+                                  ('제안대로', self.accept_topics)):
                 link = tk.Label(top, text=text, bg=HEAD, fg=ACCENT, font=ui.FONTS['label_sm'], cursor='hand2')
                 link.pack(side='right', padx=(px(12), 0))
                 link.bind('<Button-1>', lambda e, c=command: c())
         checks = tk.Frame(bar, bg=HEAD)
         checks.pack(fill='x', padx=(px(10), px(10)), pady=(px(2), px(6)))
         self.topic_vars = {}
-        for name in self.topics.labels:
+        for name in self.topics.task_labels(task):
             var = tk.BooleanVar(value=(name in ann) if ann is not None else False)
             self.topic_vars[name] = var
             hint = []
@@ -542,16 +550,31 @@ class ResultsWindow(tk.Toplevel):
                                 highlightthickness=0, cursor='hand2', command=self.save_topics)
             cb.pack(side='left', padx=(0, px(10)))
 
+    def _suggest(self, task, row):
+        """과제별 제안: 주제는 규칙 관점 + 분류 모델, 자료 유형은 서식 규칙, 직접 만든 과제는 없음."""
+        if not row:
+            return set(), {}
+        key = row.get('key')
+        if task == '주제':
+            rule = set(row['analysis'].get('facets', {}))
+            probs = self.classifier.probs.get(key, {}) if self.classifier else {}
+            return rule, probs
+        if task == '자료 유형':
+            return mtl.rule_types(row), {}
+        return set(), {}
+
     def save_topics(self, clear=False):
         rows = self.selected()
         if not rows or self.topics is None:
             return
+        task = self.annot_task.get()
         chosen = None if clear else {n for n, v in self.topic_vars.items() if v.get()}
         for row in rows:
-            self.topics.set(row.get('key'), chosen, row.get('title', ''))
-        for iid, row in self.shown.items():
-            if row in rows:
-                self.tree.set(iid, 'facets', self._facet_text(row))
+            self.topics.task_set(task, row.get('key'), chosen, row.get('title', ''))
+        if task == '주제':
+            for iid, row in self.shown.items():
+                if row in rows:
+                    self.tree.set(iid, 'facets', self._facet_text(row))
         self.refresh_topic_bar(rows[0])
 
     def no_topics(self):
@@ -563,9 +586,11 @@ class ResultsWindow(tk.Toplevel):
         row = (self.selected() or [None])[0]
         if row is None:
             return
-        suggestion = set(row['analysis'].get('facets', {}))
-        if self.classifier is not None:
-            suggestion = set(self.classifier.predict(row.get('key'))) | suggestion
+        task = self.annot_task.get()
+        rule, probs = self._suggest(task, row)
+        suggestion = set(rule)
+        if task == '주제' and self.classifier is not None:
+            suggestion |= set(self.classifier.predict(row.get('key')))
         for n, v in self.topic_vars.items():
             v.set(n in suggestion)
         self.save_topics()
