@@ -6,7 +6,7 @@ Run with Python 3.10 (bytecode must match the bundled python310.dll):
 Everything in the original archive is copied byte-for-byte except:
   - 'app' (entry script)                   -> src_dir/app.py
   - PYZ: ui_theme, result_viewer           -> src_dir/*.py
-  - PYZ: + tkinter.font (stdlib, was not bundled before)
+  - PYZ: + ranker (new), + tkinter.font (stdlib, was not bundled before)
   - + fonts/*.otf and fonts/*.txt as data files (extracted next to the modules)
 """
 import marshal
@@ -37,17 +37,19 @@ header = pyz[:17]
 assert header[:4] == b'PYZ\0'
 toc_off = struct.unpack('!i', pyz[8:12])[0]
 items = marshal.loads(pyz[toc_off:])
-replace = {
-    'ui_theme': (0, code_of(src_dir / 'ui_theme.py', 'ui_theme.py')),
-    'result_viewer': (0, code_of(src_dir / 'result_viewer.py', 'result_viewer.py')),
-}
-add = {'tkinter.font': (0, code_of(Path(tkinter.__file__).with_name('font.py'), 'tkinter\\font.py'))}
 names = [n for n, _ in items]
+APP_MODULES = ('ui_theme', 'result_viewer', 'ranker')  # 바꾸거나 새로 넣을 앱 모듈
+replace, add = {}, {}
+for mod in APP_MODULES:
+    entry = (0, code_of(src_dir / f'{mod}.py', f'{mod}.py'))
+    (replace if mod in names else add)[mod] = entry
+add['tkinter.font'] = (0, code_of(Path(tkinter.__file__).with_name('font.py'), 'tkinter\\font.py'))
 new_items, blobs, pos = [], [], len(header)
 order = list(items)
-for n, entry in list(add.items()):
+for n in sorted(add):
     assert n not in names
-    order.insert(names.index('tkinter.ttk'), (n, None))
+    at = next((i for i, (m, _) in enumerate(order) if m > n), len(order))
+    order.insert(at, (n, None))
 for name, entry in order:
     if name in replace or name in add:
         typ, co = (replace.get(name) or add[name])

@@ -15,8 +15,10 @@ import analysis_engine as _engine
 from analysis_engine import analyze, default_profile
 from source_connectors import BY_ID
 from browser_links import open_web_url
+import ranker
 import ui_theme as ui
-from ui_theme import apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE
+from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
+                      OK_PALE, OK_INK, HEAD)
 
 
 # ── 분석 속도 개선 ──────────────────────────────────────────
@@ -64,6 +66,9 @@ STATUS = {
 }
 
 
+SORTS = ('학습 추천순', '규칙 점수순', '판정 필요순')
+
+
 def read_results(folder, profile=None):
     folder = Path(folder).resolve()
     settings = folder / 'active_profile.json'
@@ -99,6 +104,7 @@ def _reading_text(parent, **kw):
     text.tag_configure('meta', font=ui.FONTS['small'], foreground=MUTED, spacing3=px(2))
     text.tag_configure('chip', font=ui.FONTS['label_sm'], foreground=ACCENT, background=ACCENT_PALE)
     text.tag_configure('chip2', font=ui.FONTS['label_sm'], foreground=MUTED, background=NEUTRAL_PALE)
+    text.tag_configure('chip_ok', font=ui.FONTS['label_sm'], foreground=OK_INK, background=OK_PALE)
     text.tag_configure('head', font=ui.FONTS['label'], foreground=ACCENT, spacing1=px(14), spacing3=px(4))
     text.tag_configure('note', font=ui.FONTS['small'], foreground=MUTED, lmargin1=px(2), lmargin2=px(2))
     text.tag_configure('body', font=ui.FONTS['reading'], foreground=INK, spacing2=px(5))
@@ -233,7 +239,12 @@ class ResultsWindow(tk.Toplevel):
         self.period = tk.StringVar(value='모든 연대')
         self.threshold = tk.StringVar(value='전체 후보')
         self.source_filter = tk.StringVar(value='모든 자료원')
+        self.sort_mode = tk.StringVar(value=SORTS[0])
         self.info = tk.StringVar()
+        self.learn_info = tk.StringVar()
+        self.judg = None
+        self.model = ranker.Ranker()
+        self.pred = {}
 
         top = tk.Frame(self, bg=CARD)
         top.pack(fill='x')
@@ -249,6 +260,8 @@ class ResultsWindow(tk.Toplevel):
         self.bind('<Alt-Left>', lambda e: self.go_back())
         tk.Label(titles, textvariable=self.info, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
                  justify='left').pack(anchor='w', pady=(px(3), 0))
+        tk.Label(titles, textvariable=self.learn_info, bg=CARD, fg=ACCENT, font=ui.FONTS['label_sm'], anchor='w',
+                 justify='left').pack(anchor='w', pady=(px(2), 0))
         ttk.Button(head, text='다른 결과 폴더', command=self.choose_folder, cursor='hand2').pack(side='right', anchor='n')
         ttk.Button(head, text='파일 폴더 열기', command=self.open_folder, cursor='hand2').pack(side='right', anchor='n', padx=(0, px(8)))
 
@@ -267,8 +280,10 @@ class ResultsWindow(tk.Toplevel):
         self.period_box.pack(side='left', padx=(0, px(6)))
         ttk.Combobox(controls, textvariable=self.threshold, state='readonly', width=10,
                      values=['전체 후보', '60점 이상', '80점 이상']).pack(side='left', padx=(0, px(6)))
+        tk.Label(controls, text='정렬', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(10), px(8)))
+        ttk.Combobox(controls, textvariable=self.sort_mode, state='readonly', width=12, values=SORTS).pack(side='left')
         ttk.Button(controls, text='새로고침', style='Quiet.TButton', command=self.reload, cursor='hand2').pack(side='right')
-        for variable in (self.query, self.facet, self.period, self.threshold, self.source_filter):
+        for variable in (self.query, self.facet, self.period, self.threshold, self.source_filter, self.sort_mode):
             variable.trace_add('write', self.schedule_filter)
         ui.hline(top, LINE).pack(fill='x')
 
@@ -280,6 +295,7 @@ class ResultsWindow(tk.Toplevel):
         self.copy_button = ttk.Button(buttons, text='원문 주소 복사', style='Large.TButton', command=self.copy_url, cursor='hand2')
         self.copy_button.pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='공식 원문 ↗', style='Outline.TButton', command=self.open_original, cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+        ttk.Button(buttons, text='추천 성능', style='Large.TButton', command=lambda: PerformanceWindow(self), cursor='hand2').pack(side='left', padx=(px(8), 0))
         tk.Label(buttons, text='점수·분류는 검토용 규칙 기반 후보입니다. 빠른 검색은 일부 결과이며 낮은 점수도 관련 문헌일 수 있습니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='right', wraplength=px(360)).pack(side='right')
 
@@ -287,13 +303,14 @@ class ResultsWindow(tk.Toplevel):
         split.pack(fill='both', expand=True, padx=px(28), pady=(0, px(20)))
         upper = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         split.add(upper, weight=5)
-        self.tree = ttk.Treeview(upper, columns=('score', 'title', 'source', 'facets', 'year', 'status'),
+        self.tree = ttk.Treeview(upper, columns=('rec', 'score', 'label', 'title', 'source', 'facets', 'year', 'status'),
                                  show='headings', selectmode='extended', height=12)
-        for name, label, width in (('score', '점수', 56), ('title', '제목', 260), ('source', '자료집', 110),
-                                   ('facets', '관점', 96), ('year', '연대', 64), ('status', '상태', 92)):
-            self.tree.heading(name, text=label, anchor='center' if name in ('score', 'year') else 'w')
-            self.tree.column(name, width=px(width), minwidth=px(45), stretch=name == 'title',
-                             anchor='center' if name in ('score', 'year') else 'w')
+        centered = ('rec', 'score', 'label', 'year')
+        for name, label, width in (('rec', '추천', 50), ('score', '규칙', 50), ('label', '판정', 44), ('title', '제목', 230),
+                                   ('source', '자료집', 100), ('facets', '관점', 80), ('year', '연대', 56), ('status', '상태', 84)):
+            self.tree.heading(name, text=label, anchor='center' if name in centered else 'w')
+            self.tree.column(name, width=px(width), minwidth=px(40), stretch=name == 'title',
+                             anchor='center' if name in centered else 'w')
         scroll = ttk.Scrollbar(upper, orient='vertical', command=self.tree.yview, style='Card.Vertical.TScrollbar')
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
@@ -301,9 +318,19 @@ class ResultsWindow(tk.Toplevel):
         self.tree.bind('<<TreeviewSelect>>', self.show_selected)
         self.tree.tag_configure('even', background=CARD)
         self.tree.tag_configure('odd', background='#FBFAF7')
+        for key, label in (('1', 1), ('0', 0), ('<Delete>', None), ('<BackSpace>', None)):
+            self.tree.bind(key, lambda e, v=label: self.judge(v))
 
         lower = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         split.add(lower, weight=4)
+        bar = tk.Frame(lower, bg=HEAD)
+        bar.pack(side='top', fill='x')
+        ui.hline(lower, LINE).pack(side='top', fill='x')
+        tk.Label(bar, text='이 문헌은', bg=HEAD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(14), px(8)), pady=px(8))
+        ttk.Button(bar, text='✓ 관련 있음  1', style='Outline.TButton', command=lambda: self.judge(1), cursor='hand2').pack(side='left', pady=px(6))
+        ttk.Button(bar, text='✕ 관련 없음  0', command=lambda: self.judge(0), cursor='hand2').pack(side='left', padx=(px(6), 0), pady=px(6))
+        ttk.Button(bar, text='지우기', style='Quiet.TButton', command=lambda: self.judge(None), cursor='hand2').pack(side='left', padx=(px(2), 0))
+
         self.detail = _reading_text(lower, height=15)
         dscroll = ttk.Scrollbar(lower, orient='vertical', command=self.detail.yview, style='Card.Vertical.TScrollbar')
         self.detail.configure(yscrollcommand=dscroll.set)
@@ -349,6 +376,8 @@ class ResultsWindow(tk.Toplevel):
             self.info.set(str(exc))
             return
         self.period_box.configure(values=['모든 연대'] + sorted({r['analysis']['period'] for r in self.rows}))
+        self.judg = ranker.Judgments(self.folder, self.profile.get('target', ''))
+        self._train(full=True)
         self.filter_rows()
 
     def schedule_filter(self, *args):
@@ -383,6 +412,7 @@ class ResultsWindow(tk.Toplevel):
             if query and query not in row.get('_search', ''):
                 continue
             self.filtered.append(row)
+        self._sort(self.filtered)
         children = self.tree.get_children()
         if children:
             self.tree.delete(*children)
@@ -390,7 +420,7 @@ class ResultsWindow(tk.Toplevel):
         for i, row in self.shown.items():
             a = row['analysis']
             self.tree.insert('', 'end', iid=i, tags=('even' if int(i) % 2 == 0 else 'odd',),
-                             values=(a['score'], row.get('title', '(제목 없음)'), row.get('source', ''),
+                             values=(self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
                                      ', '.join(a['facets']) or '미분류', a['year'] or '미상',
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
@@ -403,6 +433,91 @@ class ResultsWindow(tk.Toplevel):
             self.show_selected()
         else:
             self._write_detail([('현재 조건에 해당하는 자료가 없습니다.', 'note')])
+
+    # ── 판정 · 학습 ──
+
+    def _train(self, full=False):
+        if self.judg is None:
+            return
+        data = ranker.training_data(self.rows, self.judg)
+        if full or not self.model.trained:
+            self.model = ranker.Ranker().fit(data)
+        else:
+            self.model.fit(data, epochs=8, warm=True)
+        self.pred = {r.get('key'): self.model.prob(ranker.features(r)) for r in self.rows} if self.model.trained else {}
+        pos, neg = self.judg.counts()
+        if self.model.trained:
+            self.learn_info.set(f'판정 {pos + neg}건 (관련 {pos} · 무관 {neg}) · 학습 추천 사용 중')
+        else:
+            need = []
+            if pos < ranker.MIN_PER_CLASS:
+                need.append(f'관련 {ranker.MIN_PER_CLASS - pos}건')
+            if neg < ranker.MIN_PER_CLASS:
+                need.append(f'무관 {ranker.MIN_PER_CLASS - neg}건')
+            self.learn_info.set(f'판정 {pos + neg}건 · 학습까지 ' + ', '.join(need) + ' 더')
+
+    def _rec_text(self, row):
+        p = self.pred.get(row.get('key'))
+        return '–' if p is None else str(int(round(p * 100)))
+
+    def _label_text(self, row):
+        label = self.judg.get(row.get('key')) if self.judg else None
+        return '✓' if label == 1 else '✕' if label == 0 else ''
+
+    def _sort(self, rows):
+        mode = self.sort_mode.get()
+        rule = {id(r): i for i, r in enumerate(self.rows)}  # 원래 규칙 점수 순서
+        if mode == '학습 추천순' and self.pred:
+            rows.sort(key=lambda r: (-self.pred.get(r.get('key'), 0.0), rule[id(r)]))
+        elif mode == '판정 필요순':
+            rows.sort(key=self._need_key(rows, rule))
+        else:
+            rows.sort(key=lambda r: rule[id(r)])
+
+    def _need_key(self, rows, rule):
+        # 능동 학습: 모델이 가장 헷갈리는(추천 50 근처) 미판정 문헌부터.
+        # 학습 전에는 규칙 점수 경계 근처를, 자료집이 번갈아 나오게 섞어서 보여줍니다.
+        turn, seen = {}, {}
+        for r in sorted(rows, key=lambda r: rule[id(r)]):
+            src = r.get('source', '')
+            turn[id(r)] = seen.get(src, 0)
+            seen[src] = turn[id(r)] + 1
+
+        def key(r):
+            labeled = self.judg is not None and self.judg.get(r.get('key')) is not None
+            if self.pred:
+                return (labeled, round(abs(self.pred.get(r.get('key'), 0.5) - 0.5), 2), turn[id(r)], rule[id(r)])
+            return (labeled, turn[id(r)], round(abs(r['analysis']['score'] - 60) / 100.0, 1), rule[id(r)])
+        return key
+
+    def _next_to_judge(self, current):
+        if self.sort_mode.get() == '판정 필요순':
+            rule = {id(r): i for i, r in enumerate(self.rows)}
+            open_rows = [(i, r) for i, r in self.shown.items() if i != current and self.judg.get(r.get('key')) is None]
+            if open_rows:
+                key = self._need_key([r for _, r in open_rows], rule)
+                return min(open_rows, key=lambda x: key(x[1]))[0]
+        return self.tree.next(current)
+
+    def judge(self, label):
+        rows = self.selected()
+        if not rows or self.judg is None:
+            return 'break'
+        for row in rows:
+            self.judg.set(row.get('key'), label, row.get('title', ''))
+        self._train()
+        for iid, row in self.shown.items():
+            self.tree.set(iid, 'rec', self._rec_text(row))
+            self.tree.set(iid, 'label', self._label_text(row))
+        current = self.tree.selection()
+        if len(current) == 1 and label is not None:
+            nxt = self._next_to_judge(current[0])
+            if nxt:
+                self.tree.selection_set(nxt)
+                self.tree.see(nxt)
+                self.tree.focus(nxt)
+        self.show_selected()
+        return 'break'
 
     def selected(self):
         return [self.shown[key] for key in self.tree.selection() if key in self.shown]
@@ -421,14 +536,27 @@ class ResultsWindow(tk.Toplevel):
         row = rows[0]
         a = row['analysis']
         status = STATUS.get(row.get('status'), row.get('status', ''))
-        parts = [
-            (f" 관련성 {a['score']}점 ", 'chip'), ('  ', None),
+        label = self.judg.get(row.get('key')) if self.judg else None
+        p = self.pred.get(row.get('key'))
+        parts = []
+        if p is not None:
+            parts += [(f' 추천 {int(round(p * 100))} ', 'chip'), ('  ', None)]
+        if label is not None:
+            parts += [(' ✓ 관련 ' if label == 1 else ' ✕ 무관 ', 'chip_ok' if label == 1 else 'chip2'), ('  ', None)]
+        parts += [
+            (f" 규칙 {a['score']}점 ", 'chip2' if p is not None else 'chip'), ('  ', None),
             (f" {', '.join(a['facets']) or '미분류'} ", 'chip2'), ('  ', None),
             (f" {a['year'] or '연대 미상'} ", 'chip2'), ('  ', None),
             (f" {status} ", 'chip2'), ('\n', 'meta'),
             (row.get('title', '(제목 없음)') + '\n', 'title'),
             (row.get('source', '') + '\n', 'meta'),
             (row.get('url', '') + '\n', 'link'),
+        ]
+        if p is not None:
+            why = self.model.contributions(ranker.features(row))
+            parts.append(('추천 근거 — 내 판정에서 배운 가중치\n', 'head'))
+            parts.append(('\n'.join(f"{'+' if c > 0 else '−'}{abs(c):.2f}  {name}" for name, c in why) + '\n', 'note'))
+        parts += [
             ('점수 근거 — 확률 아님\n', 'head'),
             ('\n'.join(a['score_reasons']) + '\n', 'note'),
             (f"분석 근거: {a['basis']} / 기록 연대: {a['year'] or '미상'}\n연대 근거: {a['year_source'] or '명시 연대 없음'}\n", 'note'),
@@ -488,3 +616,88 @@ class ResultsWindow(tk.Toplevel):
                 messagebox.showinfo('결과 폴더', str(self.folder), parent=self)
         except OSError as exc:
             messagebox.showerror('폴더 열기', str(exc), parent=self)
+
+
+class PerformanceWindow(tk.Toplevel):
+    """추천 성능: 내 판정 기준으로 규칙 점수와 학습 추천을 비교합니다."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        apply_theme(self)
+        self.title('추천 성능 — 내 판정 기준')
+        ui.fit_geometry(self, 920, 720, 700, 520)
+        self.bind('<Escape>', lambda e: self.destroy())
+        head = tk.Frame(self, bg=CARD)
+        head.pack(fill='x')
+        inner = tk.Frame(head, bg=CARD)
+        inner.pack(fill='x', padx=px(24), pady=(px(18), px(14)))
+        trow = tk.Frame(inner, bg=CARD)
+        trow.pack(anchor='w')
+        ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.destroy, cursor='hand2').pack(side='left', padx=(0, px(10)))
+        tk.Label(trow, text='추천 성능', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        tk.Label(inner, text='판정한 문헌만 놓고, 규칙 점수 순위와 학습 추천 순위가 내 판정을 얼마나 잘 맞히는지 비교합니다.\n'
+                             '학습 추천은 교차검증 값입니다(각 문헌을 그 문헌의 판정을 보지 않은 모델로 채점).',
+                 bg=CARD, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(4), 0))
+        ui.hline(head, LINE).pack(fill='x')
+        body = ui.ScrollFrame(self)
+        body.pack(fill='both', expand=True)
+        page = tk.Frame(body.body, bg=BG)
+        page.pack(fill='both', expand=True, padx=px(24), pady=px(18))
+
+        data = ranker.training_data(parent.rows, parent.judg) if parent.judg else []
+        pos = sum(y for _, y in data)
+        unlabeled = len(parent.rows) - len(data)
+        stats = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        stats.pack(fill='x')
+        for i, (label, value) in enumerate((('판정한 문헌', len(data)), ('관련', pos), ('무관', len(data) - pos), ('미판정', unlabeled))):
+            stats.columnconfigure(i, weight=1, uniform='s')
+            cell = tk.Frame(stats, bg=CARD, padx=px(18), pady=px(12))
+            cell.grid(row=0, column=i, sticky='nsew')
+            tk.Label(cell, text=label, bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
+            tk.Label(cell, text=str(value), bg=CARD, fg=INK, font=ui.FONTS['metric']).pack(anchor='w')
+
+        if pos < 2 or len(data) - pos < 2:
+            tk.Label(page, text='관련·무관 판정이 각각 2건 이상 있어야 비교할 수 있습니다.\n'
+                                '결과 창에서 문헌을 고르고 1(관련) / 0(무관)을 누르세요. "판정 필요순" 정렬이 도움이 됩니다.',
+                     bg=BG, fg=MUTED, font=ui.FONTS['body'], justify='left').pack(anchor='w', pady=(px(18), 0))
+            return
+        ev = ranker.evaluate(data)
+        table = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        table.pack(fill='x', pady=(px(16), 0))
+        table.columnconfigure(0, weight=1)
+        for c, text in enumerate(('지표', '규칙 점수', '학습 추천')):
+            tk.Label(table, text=text, bg=HEAD, fg=MUTED, font=ui.FONTS['label_sm'], anchor='w' if c == 0 else 'center',
+                     padx=px(14), pady=px(8)).grid(row=0, column=c, sticky='nsew')
+
+        def fmt(v):
+            return '–' if v is None else f'{v * 100:.0f}%'
+
+        for r, (name, rule, learned) in enumerate(ev['rows'], start=1):
+            better = learned is not None and rule is not None and learned > rule + 1e-9
+            tk.Label(table, text=name, bg=CARD, fg=INK, font=ui.FONTS['body'], anchor='w', padx=px(14), pady=px(8)).grid(row=r, column=0, sticky='nsew')
+            tk.Label(table, text=fmt(rule), bg=CARD, fg=INK, font=ui.FONTS['body'], width=10).grid(row=r, column=1, sticky='nsew')
+            tk.Label(table, text=fmt(learned), bg=CARD, fg=ACCENT if better else INK,
+                     font=ui.FONTS['label'] if better else ui.FONTS['body'], width=10).grid(row=r, column=2, sticky='nsew')
+        tk.Label(page, text=f'참고: 판정한 문헌 중 관련 비율은 {fmt(ev["base"])}입니다. 아무렇게나 순서를 매기면 Precision이 이 값, AUC가 50%가 됩니다.\n'
+                            '판정한 문헌 안에서만 잰 값이라, 판정을 고르게(위·아래 순위 모두) 할수록 믿을 만합니다.',
+                 bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(8), 0))
+
+        if parent.model.trained:
+            up, down = parent.model.top_weights(8)
+            cols = tk.Frame(page, bg=BG)
+            cols.pack(fill='x', pady=(px(16), 0))
+            cols.columnconfigure(0, weight=1, uniform='w')
+            cols.columnconfigure(1, weight=1, uniform='w')
+            for c, (title, items, color) in enumerate((('관련 쪽으로 올리는 근거', up, OK_INK), ('무관 쪽으로 내리는 근거', down, '#9A2F1F'))):
+                box = ui.card(cols, 18, 14)
+                box.grid(row=0, column=c, sticky='nsew', padx=(0, px(8)) if c == 0 else 0)
+                tk.Label(box, text=title, bg=CARD, fg=INK, font=ui.FONTS['h3']).pack(anchor='w', pady=(0, px(6)))
+                for name, w in items:
+                    line = tk.Frame(box, bg=CARD)
+                    line.pack(fill='x')
+                    tk.Label(line, text=name, bg=CARD, fg=INK, font=ui.FONTS['small'], anchor='w').pack(side='left')
+                    tk.Label(line, text=f'{w:+.2f}', bg=CARD, fg=color, font=ui.FONTS['label_sm']).pack(side='right')
+                if not items:
+                    tk.Label(box, text='아직 없음', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
+        tk.Label(page, text='판정은 결과 폴더의 judgments.json · judgments.csv에 저장되어 연구 기록으로 남습니다.',
+                 bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w', pady=(px(14), 0))
