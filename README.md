@@ -169,4 +169,4 @@ python3.10 tools/repack.py 역사자료연구실-v3.exe src 역사자료연구�
 | 파일 | SHA-256 |
 |---|---|
 | 역사자료연구실-v3.exe (원본) | `f6f46bcaa4f0efd834781cf6778ffe565752fd42320850f34a6c745fe28a0086` |
-| 역사자료연구실-v3.1.exe | `` |
+| 역사자료연구실-v3.1.exe | `466e272da9b4ba6315e8bd30d7963d34656ce1202425d8b5ef47f9c78f7f4acf` |
