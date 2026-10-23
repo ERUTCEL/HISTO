@@ -85,7 +85,12 @@ class RelationsWindow(tk.Toplevel):
         head.pack(fill='x')
         inner = tk.Frame(head, bg=CARD)
         inner.pack(fill='x', padx=px(24), pady=(px(18), px(14)))
-        tk.Label(inner, text='관계 후보 지도', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(anchor='w')
+        trow = tk.Frame(inner, bg=CARD)
+        trow.pack(anchor='w')
+        ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.go_back, cursor='hand2').pack(side='left', padx=(0, px(10)))
+        tk.Label(trow, text='관계 후보 지도', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        self.bind('<Escape>', lambda e: self.go_back())
+        self.bind('<Alt-Left>', lambda e: self.go_back())
         tk.Label(inner, text='현재 필터의 문헌에서 같은 문장에 나온 표현을 연결합니다. 혈연·지시·소유 관계를 뜻하지 않습니다.\n'
                              '상위 12개 표현 / 최대 30개 연결. 한문·국문 및 주석 중복이 있을 수 있습니다.',
                  bg=CARD, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(4), 0))
@@ -146,6 +151,15 @@ class RelationsWindow(tk.Toplevel):
             self.canvas.create_rectangle(x - w, y - px(16), x + w, y + px(16), fill=CARD, outline=ACCENT, width=2)
             self.canvas.create_text(x, y, text=name, fill=ACCENT, font=ui.FONTS['label_sm'])
 
+    def go_back(self):
+        parent = self.master
+        self.destroy()
+        try:
+            parent.lift()
+            parent.focus_force()
+        except tk.TclError:
+            pass
+
     def show_edge(self, index):
         self._current = index
         self.edges_list.current(index)
@@ -185,7 +199,12 @@ class ResultsWindow(tk.Toplevel):
         head.pack(fill='x', padx=px(28), pady=(px(20), 0))
         titles = tk.Frame(head, bg=CARD)
         titles.pack(side='left', fill='x', expand=True)
-        tk.Label(titles, text='문헌 결과', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(anchor='w')
+        trow = tk.Frame(titles, bg=CARD)
+        trow.pack(anchor='w')
+        ttk.Button(trow, text='←  연구실로', style='Quiet.TButton', command=self.go_back, cursor='hand2').pack(side='left', padx=(0, px(10)))
+        tk.Label(trow, text='문헌 결과', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        self.bind('<Escape>', lambda e: self.go_back())
+        self.bind('<Alt-Left>', lambda e: self.go_back())
         tk.Label(titles, textvariable=self.info, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
                  justify='left').pack(anchor='w', pady=(px(3), 0))
         ttk.Button(head, text='다른 결과 폴더', command=self.choose_folder, cursor='hand2').pack(side='right', anchor='n')
@@ -253,6 +272,17 @@ class ResultsWindow(tk.Toplevel):
         if event.width > px(400) and not getattr(self, '_sash_done', False):
             self._sash_done = True
             self.after_idle(lambda: self._split.sashpos(0, int(event.width * 0.58)))
+
+    def go_back(self):
+        # 결과 창을 닫고 메인 연구실 창으로 돌아갑니다.
+        parent = self.master
+        self.destroy()
+        try:
+            parent.deiconify()
+            parent.lift()
+            parent.focus_force()
+        except tk.TclError:
+            pass
 
     def reload(self):
         try:

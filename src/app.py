@@ -128,7 +128,12 @@ class App(tk.Tk):
         self.page_lead = tk.StringVar()
         heads = tk.Frame(header, bg=BG)
         heads.pack(side='left', fill='x', expand=True)
-        tk.Label(heads, textvariable=self.page_title, bg=BG, fg=INK, font=ui.FONTS['h1'], anchor='w').pack(anchor='w')
+        title_row = tk.Frame(heads, bg=BG)
+        title_row.pack(anchor='w')
+        self.history = []
+        self.current_page = None
+        self.back_button = ttk.Button(title_row, text='←  뒤로', style='Link.TButton', command=self.go_back, cursor='hand2')
+        tk.Label(title_row, textvariable=self.page_title, bg=BG, fg=INK, font=ui.FONTS['h1'], anchor='w').pack(side='left')
         self.lead_label = tk.Label(heads, textvariable=self.page_lead, bg=BG, fg=MUTED, font=ui.FONTS['body'],
                                    anchor='w', justify='left')
         self.lead_label.pack(anchor='w', pady=(px(4), 0))
@@ -150,6 +155,7 @@ class App(tk.Tk):
         self.sources_changed()
         self.show_page('search')
         self.protocol('WM_DELETE_WINDOW', self.close)
+        self.bind('<Alt-Left>', lambda e: self.go_back())
         self.after(150, self.poll)
         self.after(250, self.refresh_counts)
 
@@ -397,9 +403,14 @@ class App(tk.Tk):
 
     # ── 동작 ───────────────────────────────────────────────
 
-    def show_page(self, key):
+    def show_page(self, key, remember=True):
         if not hasattr(self, 'pages'):
             return
+        if remember and self.current_page and self.current_page != key:
+            self.history.append(self.current_page)
+            del self.history[:-30]
+        self.current_page = key
+        self._update_back()
         for page in self.pages.values():
             page.pack_forget()
         self.pages[key].pack(fill='both', expand=True)
@@ -411,6 +422,21 @@ class App(tk.Tk):
             b.set_active(name == key)
         if key == 'library':
             self.refresh_counts()
+
+    def _update_back(self):
+        # 돌아갈 화면이 있을 때만 '← 뒤로'를 제목 앞에 보입니다.
+        if self.history:
+            if not self.back_button.winfo_ismapped():
+                self.back_button.pack(side='left', before=self.back_button.master.winfo_children()[-1],
+                                      padx=(0, px(10)))
+            prev = next(t for n, t, _ in PAGES if n == self.history[-1])
+            self.back_button.configure(text=f'←  {prev}')
+        else:
+            self.back_button.pack_forget()
+
+    def go_back(self):
+        if self.history:
+            self.show_page(self.history.pop(), remember=False)
 
     def selected_sources(self):
         return [key for key in AUTO_IDS if self.source_vars[key].get()]
