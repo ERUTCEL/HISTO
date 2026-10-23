@@ -352,7 +352,87 @@ def apply_theme(root):
                     lightcolor=ACCENT, darkcolor=ACCENT, thickness=px(4), borderwidth=0)
     style.configure('TPanedwindow', background=BG)
     style.configure('Sash', sashthickness=px(12), background=BG, bordercolor=BG, lightcolor=BG, darkcolor=BG, gripcount=0)
+    _install_ime_font(root)
     return style
+
+
+# ── 한글 입력(IME) 조합 글꼴 ─────────────────────────────────
+# Windows IME는 조합 중인 글자를 시스템 기본 글꼴(작은 크기)로 그리고, 완성된 글자만
+# 입력칸 글꼴로 넣습니다. 그래서 '작게 쳐지다가 커지는' 현상이 생깁니다.
+# 입력칸에 포커스가 갈 때 IME 조합 글꼴을 그 칸의 글꼴·크기로 맞춥니다.
+
+_IME_READY = set()
+
+
+def _ime_font_for(widget):
+    try:
+        spec = widget.cget('font')
+    except tk.TclError:
+        spec = ''
+    try:
+        return tkfont.Font(root=widget, font=spec or 'TkTextFont').actual()
+    except tk.TclError:
+        return tkfont.nametofont('TkTextFont', root=widget).actual()
+
+
+def _set_ime_font(widget):
+    import ctypes
+
+    class LOGFONTW(ctypes.Structure):
+        _fields_ = [('lfHeight', ctypes.c_long), ('lfWidth', ctypes.c_long),
+                    ('lfEscapement', ctypes.c_long), ('lfOrientation', ctypes.c_long),
+                    ('lfWeight', ctypes.c_long), ('lfItalic', ctypes.c_ubyte),
+                    ('lfUnderline', ctypes.c_ubyte), ('lfStrikeOut', ctypes.c_ubyte),
+                    ('lfCharSet', ctypes.c_ubyte), ('lfOutPrecision', ctypes.c_ubyte),
+                    ('lfClipPrecision', ctypes.c_ubyte), ('lfQuality', ctypes.c_ubyte),
+                    ('lfPitchAndFamily', ctypes.c_ubyte), ('lfFaceName', ctypes.c_wchar * 32)]
+
+    actual = _ime_font_for(widget)
+    size = actual.get('size', 10)
+    height = -abs(int(round(widget.winfo_fpixels(f'{size}p')))) if size > 0 else size
+    lf = LOGFONTW()
+    lf.lfHeight = height
+    lf.lfWeight = 700 if actual.get('weight') == 'bold' else 400
+    lf.lfCharSet = 1          # DEFAULT_CHARSET
+    lf.lfQuality = 5          # CLEARTYPE_QUALITY
+    lf.lfFaceName = actual.get('family', FAMILY)[:31]
+
+    imm, user = ctypes.windll.imm32, ctypes.windll.user32
+    imm.ImmGetContext.restype = ctypes.c_void_p
+    imm.ImmGetContext.argtypes = [ctypes.c_void_p]
+    imm.ImmSetCompositionFontW.argtypes = [ctypes.c_void_p, ctypes.POINTER(LOGFONTW)]
+    imm.ImmReleaseContext.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user.GetFocus.restype = ctypes.c_void_p
+    done = []
+    for hwnd in {user.GetFocus(), widget.winfo_id()}:
+        if not hwnd:
+            continue
+        himc = imm.ImmGetContext(hwnd)
+        if himc:
+            done.append(bool(imm.ImmSetCompositionFontW(himc, ctypes.byref(lf))))
+            imm.ImmReleaseContext(hwnd, himc)
+    log = os.environ.get('HISTO_IME_LOG')
+    if log:
+        with open(log, 'a', encoding='utf-8') as f:
+            f.write(f'{widget.winfo_class()} {lf.lfFaceName} {lf.lfHeight} {done}\n')
+
+
+def _install_ime_font(root):
+    if os.name != 'nt' or str(root.tk) in _IME_READY:
+        return
+    _IME_READY.add(str(root.tk))
+
+    def on_focus(event):
+        widget = event.widget
+        def apply():
+            try:
+                _set_ime_font(widget)
+            except Exception:
+                pass
+        widget.after_idle(apply)
+
+    for cls in ('TEntry', 'Entry', 'Text', 'TCombobox'):
+        root.bind_class(cls, '<FocusIn>', on_focus, add='+')
 
 
 # ── 화면 조립 도우미 ─────────────────────────────────────────
