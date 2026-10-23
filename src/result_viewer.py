@@ -16,6 +16,8 @@ from analysis_engine import analyze, default_profile
 from source_connectors import BY_ID
 from browser_links import open_web_url
 import ranker
+import textlab as tl
+from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
                       OK_PALE, OK_INK, HEAD)
@@ -245,6 +247,12 @@ class ResultsWindow(tk.Toplevel):
         self.judg = None
         self.model = ranker.Ranker()
         self.pred = {}
+        self.index = None          # TF-IDF (2강)
+        self.wordspace = None      # PMI·SVD (3강)
+        self.topics = None         # 주제 주석 (5·6강)
+        self.classifier = None
+        self._by_key = {}
+        self.lab = None
 
         top = tk.Frame(self, bg=CARD)
         top.pack(fill='x')
@@ -296,8 +304,10 @@ class ResultsWindow(tk.Toplevel):
         self.copy_button.pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='공식 원문 ↗', style='Outline.TButton', command=self.open_original, cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
         ttk.Button(buttons, text='추천 성능', style='Large.TButton', command=lambda: PerformanceWindow(self), cursor='hand2').pack(side='left', padx=(px(8), 0))
-        tk.Label(buttons, text='점수·분류는 검토용 규칙 기반 후보입니다. 빠른 검색은 일부 결과이며 낮은 점수도 관련 문헌일 수 있습니다.',
-                 bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='right', wraplength=px(360)).pack(side='right')
+        ttk.Button(buttons, text='비슷한 문헌', style='Large.TButton', cursor='hand2',
+                   command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left', padx=(px(8), 0))
+        ttk.Button(buttons, text='텍스트 분석', style='Outline.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+
 
         split = ttk.Panedwindow(self, orient='horizontal')
         split.pack(fill='both', expand=True, padx=px(28), pady=(0, px(20)))
@@ -330,6 +340,9 @@ class ResultsWindow(tk.Toplevel):
         ttk.Button(bar, text='✓ 관련 있음  1', style='Outline.TButton', command=lambda: self.judge(1), cursor='hand2').pack(side='left', pady=px(6))
         ttk.Button(bar, text='✕ 관련 없음  0', command=lambda: self.judge(0), cursor='hand2').pack(side='left', padx=(px(6), 0), pady=px(6))
         ttk.Button(bar, text='지우기', style='Quiet.TButton', command=lambda: self.judge(None), cursor='hand2').pack(side='left', padx=(px(2), 0))
+        self.topic_bar = tk.Frame(lower, bg=HEAD)
+        self.topic_bar.pack(side='top', fill='x')
+        self.topic_vars = {}
 
         self.detail = _reading_text(lower, height=15)
         dscroll = ttk.Scrollbar(lower, orient='vertical', command=self.detail.yview, style='Card.Vertical.TScrollbar')
@@ -377,6 +390,11 @@ class ResultsWindow(tk.Toplevel):
             return
         self.period_box.configure(values=['모든 연대'] + sorted({r['analysis']['period'] for r in self.rows}))
         self.judg = ranker.Judgments(self.folder, self.profile.get('target', ''))
+        self._by_key = {r.get('key'): r for r in self.rows}
+        self.index, self.wordspace, self.classifier = None, None, None
+        self.topics = tl.TopicLabels(self.folder, self.profile.get('target', ''), list(self.profile.get('facets', {})))
+        self.facet_box.configure(values=['모든 관점'] + list(self.topics.labels) + ['미분류'])
+        self.refresh_topic_bar()
         self._train(full=True)
         self.filter_rows()
 
@@ -403,10 +421,12 @@ class ResultsWindow(tk.Toplevel):
                     continue
             if a['score'] < minimum:
                 continue
-            if facet == '미분류' and a['facets']:
-                continue
-            if facet not in ('모든 관점', '미분류') and facet not in a['facets']:
-                continue
+            if facet != '모든 관점':
+                topics = self._topics_of(row)
+                if facet == '미분류' and topics:
+                    continue
+                if facet != '미분류' and facet not in topics:
+                    continue
             if period != '모든 연대' and a['period'] != period:
                 continue
             if query and query not in row.get('_search', ''):
@@ -421,7 +441,7 @@ class ResultsWindow(tk.Toplevel):
             a = row['analysis']
             self.tree.insert('', 'end', iid=i, tags=('even' if int(i) % 2 == 0 else 'odd',),
                              values=(self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
-                                     ', '.join(a['facets']) or '미분류', a['year'] or '미상',
+                                     self._facet_text(row), a['year'] or '미상',
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 / 필터 {len(self.filtered)}건 / 화면 {len(self.shown)}건 · 관련성 점수순'
@@ -433,6 +453,122 @@ class ResultsWindow(tk.Toplevel):
             self.show_selected()
         else:
             self._write_detail([('현재 조건에 해당하는 자료가 없습니다.', 'note')])
+
+    # ── 텍스트 분석 · 주제 ──
+
+    def row_by_key(self, key):
+        return self._by_key.get(key)
+
+    def ensure_index(self):
+        if self.index is None:
+            self.configure(cursor='watch')
+            self.update_idletasks()
+            try:
+                self.index = tl.TfidfIndex(self.rows)
+            finally:
+                self.configure(cursor='')
+        return self.index
+
+    def open_lab(self, tab, **kw):
+        if self.lab is not None and self.lab.winfo_exists():
+            self.lab.deiconify()
+            self.lab.lift()
+            self.lab.show(tab, **kw)
+            return
+        self.lab = TextLabWindow(self, tab)
+        if kw:
+            self.lab.show(tab, **kw)
+
+    def focus_key(self, key):
+        for iid, row in self.shown.items():
+            if row.get('key') == key:
+                self.tree.selection_set(iid)
+                self.tree.see(iid)
+                self.show_selected()
+                self.lift()
+                return
+        messagebox.showinfo('문헌 열기', '현재 필터에 보이지 않는 문헌입니다. 필터를 풀고 다시 시도하세요.', parent=self)
+
+    def _topics_of(self, row):
+        topics = set(row['analysis'].get('facets', {}))
+        if self.classifier is not None:
+            topics.update(self.classifier.predict(row.get('key')))
+        ann = self.topics.get(row.get('key')) if self.topics else None
+        return ann if ann is not None else topics
+
+    def _facet_text(self, row):
+        key = row.get('key')
+        ann = self.topics.get(key) if self.topics else None
+        if ann is not None:
+            return ('✎ ' + ', '.join(sorted(ann))) if ann else '✎ 해당 없음'
+        rule = list(row['analysis'].get('facets', {}))
+        extra = [n for n in (self.classifier.predict(key) if self.classifier else []) if n not in rule]
+        return ', '.join(rule + ['+' + n for n in extra]) or '미분류'
+
+    def refresh_topic_bar(self, row=None):
+        bar = self.topic_bar
+        for w in bar.winfo_children():
+            w.destroy()
+        if self.topics is None:
+            return
+        row = row or (self.selected() or [None])[0]
+        key = row.get('key') if row else None
+        ann = self.topics.get(key) if key else None
+        rule = set(row['analysis'].get('facets', {})) if row else set()
+        probs = self.classifier.probs.get(key, {}) if (self.classifier and key) else {}
+        top = tk.Frame(bar, bg=HEAD)
+        top.pack(fill='x', padx=(px(14), px(10)), pady=(px(6), 0))
+        tk.Label(top, text='주제 ✎ 주석됨' if ann is not None else '주제 (미주석 · 괄호는 규칙/모델 확률)', bg=HEAD,
+                 fg=ACCENT if ann is not None else MUTED, font=ui.FONTS['label_sm']).pack(side='left')
+        if key:
+            for text, command in (('지우기', lambda: self.save_topics(clear=True)), ('해당 없음', self.no_topics),
+                                  ('제안대로 주석', self.accept_topics)):
+                link = tk.Label(top, text=text, bg=HEAD, fg=ACCENT, font=ui.FONTS['label_sm'], cursor='hand2')
+                link.pack(side='right', padx=(px(12), 0))
+                link.bind('<Button-1>', lambda e, c=command: c())
+        checks = tk.Frame(bar, bg=HEAD)
+        checks.pack(fill='x', padx=(px(10), px(10)), pady=(px(2), px(6)))
+        self.topic_vars = {}
+        for name in self.topics.labels:
+            var = tk.BooleanVar(value=(name in ann) if ann is not None else False)
+            self.topic_vars[name] = var
+            hint = []
+            if name in rule:
+                hint.append('규칙')
+            if name in probs:
+                hint.append(f'{probs[name]:.2f}')
+            cb = tk.Checkbutton(checks, text=name + (f" ({' · '.join(hint)})" if hint else ''), variable=var, bg=HEAD,
+                                activebackground=HEAD, fg=INK, selectcolor=CARD, font=ui.FONTS['small'], bd=0,
+                                highlightthickness=0, cursor='hand2', command=self.save_topics)
+            cb.pack(side='left', padx=(0, px(10)))
+
+    def save_topics(self, clear=False):
+        rows = self.selected()
+        if not rows or self.topics is None:
+            return
+        chosen = None if clear else {n for n, v in self.topic_vars.items() if v.get()}
+        for row in rows:
+            self.topics.set(row.get('key'), chosen, row.get('title', ''))
+        for iid, row in self.shown.items():
+            if row in rows:
+                self.tree.set(iid, 'facets', self._facet_text(row))
+        self.refresh_topic_bar(rows[0])
+
+    def no_topics(self):
+        for v in self.topic_vars.values():
+            v.set(False)
+        self.save_topics()
+
+    def accept_topics(self):
+        row = (self.selected() or [None])[0]
+        if row is None:
+            return
+        suggestion = set(row['analysis'].get('facets', {}))
+        if self.classifier is not None:
+            suggestion = set(self.classifier.predict(row.get('key'))) | suggestion
+        for n, v in self.topic_vars.items():
+            v.set(n in suggestion)
+        self.save_topics()
 
     # ── 판정 · 학습 ──
 
@@ -572,6 +708,7 @@ class ResultsWindow(tk.Toplevel):
             parts += [('수집 오류\n', 'head'), (row['error'] + '\n', 'error')]
         self._write_detail(parts)
         self.detail.yview_moveto(0)
+        self.refresh_topic_bar(row)
 
     def copy_url(self):
         rows = self.selected()
@@ -616,6 +753,7 @@ class ResultsWindow(tk.Toplevel):
                 messagebox.showinfo('결과 폴더', str(self.folder), parent=self)
         except OSError as exc:
             messagebox.showerror('폴더 열기', str(exc), parent=self)
+
 
 
 class PerformanceWindow(tk.Toplevel):

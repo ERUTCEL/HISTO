@@ -38,7 +38,7 @@ assert header[:4] == b'PYZ\0'
 toc_off = struct.unpack('!i', pyz[8:12])[0]
 items = marshal.loads(pyz[toc_off:])
 names = [n for n, _ in items]
-APP_MODULES = ('ui_theme', 'result_viewer', 'ranker')  # 바꾸거나 새로 넣을 앱 모듈
+APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui')  # 바꾸거나 새로 넣을 앱 모듈
 replace, add = {}, {}
 for mod in APP_MODULES:
     entry = (0, code_of(src_dir / f'{mod}.py', f'{mod}.py'))

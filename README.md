@@ -59,6 +59,39 @@ v3 실행파일(`역사자료연구실-v3.exe`)의 **기능은 그대로 두고 
 ![](docs/screenshots/after-judge.png)
 ![](docs/screenshots/after-performance.png)
 
+## 텍스트 분석 (강의 2~6강 기술 적용)
+
+결과 창의 **텍스트 분석** 버튼(또는 **비슷한 문헌**)으로 엽니다. 모두 인터넷 없이, 파이썬 표준 기능만으로 동작합니다(`src/textlab.py`, `src/textlab_ui.py`).
+
+| 강의 | 기술 | 앱 기능 | 구현 |
+|---|---|---|---|
+| 2강 Sparse | BoW, TF-IDF, 코사인 | **유사도 검색 · 비슷한 문헌** | 한글은 조사·어미를 떼고, 띄어쓰기 없는 한문은 두 글자씩 잘라 BoW → 서브리니어 TF-IDF → 역색인 코사인. 겹치는 핵심어 표시 |
+| 3강 Dense static | PMI, SVD, Skip-gram | **어휘 관계(시대별)** | 4어절 창 공기 행렬 → PPMI(문맥 분포 0.75제곱 평활) → 부분공간 반복법 절단 SVD 32차원. 시대(세기)별 PPMI 연관어 |
+| 4강 Contextual | 문맥 표현 | **문맥 용례** | 용어가 나온 자리마다 앞뒤 문맥 TF-IDF 벡터 → k-평균(군집 수는 실루엣으로 선택) → 쓰임새별 용례(KWIC) |
+| 5강 Classification | 다중 라벨 분류 | **주제 분류** | 라벨별 로지스틱 회귀(one-vs-rest), TF-IDF 특징, 주제 추가 가능 |
+| 6강 Semi-supervised | 의사라벨 | **적은 주석으로 전체 분류** | 규칙 관점 = 약한 라벨, 연구자 주석 = 강한 라벨 → 학습 → 확신 높은 미주석 문헌에 의사라벨 → 재학습. 약한 음성에 섞인 양성은 PU 보정(Elkan–Noto), 주석으로 라벨별 기준선 조정 |
+
+**넣지 않은 것**: BERT 등 사전학습 트랜스포머(4강)와 그 미세조정(5강). 모델 파일만 수백 MB이고 GPU·인터넷이 필요해 오프라인 단일 EXE에 맞지 않습니다. 4강은 문맥 벡터 군집으로 근사했습니다.
+
+**검증(가상 사료 1,500건, 주제의 절반은 규칙 키워드 없이 서술)** — `tools/make_test_corpus.py`
+
+| 주석 수 | 규칙 관점 F1 | 준지도 분류 F1 | 의사라벨 없이 |
+|---|---|---|---|
+| 0 | 0.769 | 0.779 | 0.777 |
+| 10 | 0.769 | 0.784 | 0.782 |
+| 40 | 0.769 | **0.871** | 0.867 |
+| 100 | 0.769 | **0.883** | 0.888 |
+
+앱 안 교차검증(주석 40건): 마이크로 F1 규칙 0.71 → 모델 0.86, 제도사 0.52 → 0.87. 이득은 주로 약한 라벨 + 주석 + PU 보정에서 나오고, 의사라벨 단계의 추가 이득은 이 시험에서 ±0.01 수준이었습니다.
+속도(5,000건): TF-IDF 색인 1.3초, 검색 1ms, 어휘 관계 약 3초(백그라운드), 주제 학습 1,500건 약 3초(백그라운드).
+
+주석·예측은 결과 폴더 `topic_labels.json/csv`, `topic_predictions.csv`에 저장됩니다.
+
+| | |
+|---|---|
+| ![](docs/screenshots/lab-search.png) | ![](docs/screenshots/lab-words.png) |
+| ![](docs/screenshots/lab-context.png) | ![](docs/screenshots/lab-topics.png) |
+
 ## 폴더
 
 ```
@@ -66,6 +99,8 @@ src/app.py             메인 창 (원본 바이트코드에서 로직을 복원
 src/result_viewer.py   문헌 결과 창 · 관계 후보 지도 (동일)
 src/ui_theme.py        색상·글꼴·스타일과 화면 조립 도우미
 src/ranker.py          판정 저장 · 특징 추출 · 학습 추천 · 교차검증 평가
+src/textlab.py         TF-IDF · PMI/SVD · 문맥 군집 · 다중 라벨 준지도 분류
+src/textlab_ui.py      텍스트 분석 창
 src/fonts/             Pretendard Regular/SemiBold/Bold + OFL 라이선스
 tools/repack.py        원본 EXE에 새 모듈·글꼴을 넣어 v3.1 EXE를 만드는 스크립트
 tools/carchive.py      PyInstaller 아카이브 읽기 도우미
@@ -74,7 +109,7 @@ docs/screenshots/      변경 전후 화면
 
 ## EXE 만들기
 
-원본 v3 EXE의 PyInstaller 아카이브에서 `app`, `ui_theme`, `result_viewer`를 교체하고 `ranker`(새 모듈), `tkinter.font`(v3에는 없던 표준 모듈)와 글꼴을 추가합니다. 나머지 1,000여 개 항목은 바이트 그대로 복사합니다. **Python 3.10**으로 실행해야 합니다(EXE에 든 python310.dll과 바이트코드 버전이 같아야 함).
+원본 v3 EXE의 PyInstaller 아카이브에서 `app`, `ui_theme`, `result_viewer`를 교체하고 `ranker`·`textlab`·`textlab_ui`(새 모듈), `tkinter.font`(v3에는 없던 표준 모듈)와 글꼴을 추가합니다. 나머지 1,000여 개 항목은 바이트 그대로 복사합니다. **Python 3.10**으로 실행해야 합니다(EXE에 든 python310.dll과 바이트코드 버전이 같아야 함).
 
 ```bash
 python3.10 tools/repack.py 역사자료연구실-v3.exe src 역사자료연구실-v3.1.exe
@@ -97,4 +132,4 @@ python3.10 tools/repack.py 역사자료연구실-v3.exe src 역사자료연구�
 | 파일 | SHA-256 |
 |---|---|
 | 역사자료연구실-v3.exe (원본) | `f6f46bcaa4f0efd834781cf6778ffe565752fd42320850f34a6c745fe28a0086` |
-| 역사자료연구실-v3.1.exe | `376209e67e0d87649d3947590b7363d0e5123dd4b1cfa01a6021412a283e1c06` |
+| 역사자료연구실-v3.1.exe | `ef849b79768e129d1a130a764de046f954db8369780ec364de39d32dc67228e2` |
