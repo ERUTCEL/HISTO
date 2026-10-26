@@ -472,6 +472,39 @@ def badge(parent, text, kind='neutral'):
     return tk.Label(parent, text=text, bg=bg, fg=fg, font=FONTS['label_sm'], padx=px(8), pady=px(1), bd=0)
 
 
+def placeholder(widget, text, variable=None):
+    """입력칸 안의 흐린 안내 문구. 값이 아니라 위에 겹친 글자라서, 입력하거나 칸을 누르면 사라집니다."""
+    is_text = isinstance(widget, tk.Text)
+    bg = widget.cget('bg') if is_text else CARD
+    hint = tk.Label(widget.master, text=text, bg=bg, fg='#9C9FA4', justify='left', anchor='nw',
+                    font=widget.cget('font') if is_text else FONTS['input_lg'], cursor='xterm')
+
+    def empty():
+        if variable is not None:
+            return not variable.get()
+        return not widget.get('1.0', 'end-1c')
+
+    def update(_=None):
+        if empty() and widget.focus_get() is not widget:
+            if is_text:
+                hint.place(in_=widget, x=int(widget.cget('padx')) + 1, y=int(widget.cget('pady')) + 1)
+            else:
+                hint.place(in_=widget, x=px(14), rely=0.5, anchor='w')
+            hint.lift()
+        else:
+            hint.place_forget()
+
+    hint.bind('<Button-1>', lambda e: (widget.focus_set(), update()))
+    widget.bind('<FocusIn>', update, add='+')
+    widget.bind('<FocusOut>', update, add='+')
+    if variable is not None:
+        variable.trace_add('write', lambda *a: update())
+    else:
+        widget.bind('<<Modified>>', lambda e: (widget.edit_modified(False), update()), add='+')
+    widget.after_idle(update)
+    return hint
+
+
 class ScrollFrame(tk.Frame):
     """세로 스크롤 영역. 내용은 self.body에 넣습니다."""
 

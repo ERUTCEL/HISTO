@@ -212,7 +212,7 @@ class BookmarkStore:
 
 
 def to_markdown(name, items):
-    lines = [f'# {name}', '', f'즐겨찾기 {len(items)}건 · 역사자료 연구실에서 저장', '']
+    lines = [f'# {name}', '', f'즐겨찾기 {len(items)}건 · HISTRO에서 저장', '']
     for i, it in enumerate(items, start=1):
         lines.append(f"## {i}. {it.get('title') or '(제목 없음)'}")
         lines.append(f"- 종류: {it.get('kind')} · 저장: {it.get('saved_at', '')[:16].replace('T', ' ')}")

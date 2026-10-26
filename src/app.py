@@ -100,7 +100,7 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title(f'역사자료 연구실 {VERSION} — 통합 탐색과 근거 중심 분석')
+        self.title(f'HISTRO {VERSION} — 사료 통합 검색과 분석')
         apply_theme(self)
         ui.fit_geometry(self, 1280, 860, 1080, 720)
         self._set_icon()
@@ -108,7 +108,7 @@ class App(tk.Tk):
         self.running = False
         self.events = queue.Queue()
         self.output = tk.StringVar(value=str(APP_HOME / '수집결과'))
-        self.target = tk.StringVar(value='숙빈 최씨')
+        self.target = tk.StringVar(value='')
         self.mode = tk.StringVar(value='빠른 검색 (목록 우선)')
         self.mode_hint = tk.StringVar(value=MODE_HINTS[self.mode.get()])
         self.state = tk.StringVar(value='검색할 인물이나 주제를 입력하세요. 저장된 문헌은 ‘내 문헌’에서 바로 읽을 수 있습니다.')
@@ -184,8 +184,8 @@ class App(tk.Tk):
         tk.Label(seal, text='史', bg=SEAL, fg='white', font=ui.FONTS['seal']).pack(expand=True)
         names = tk.Frame(brand, bg=NAV)
         names.pack(side='left', padx=(px(12), 0))
-        tk.Label(names, text='역사자료 연구실', bg=NAV, fg='white', font=ui.FONTS['brand']).pack(anchor='w')
-        tk.Label(names, text=f'HISTORY DESK · v{VERSION}', bg=NAV, fg=NAV_MUTED, font=ui.FONTS['small']).pack(anchor='w')
+        tk.Label(names, text='HISTRO', bg=NAV, fg='white', font=ui.FONTS['brand']).pack(anchor='w')
+        tk.Label(names, text=f'사료 통합 검색 · v{VERSION}', bg=NAV, fg=NAV_MUTED, font=ui.FONTS['small']).pack(anchor='w')
 
         menu = tk.Frame(side, bg=NAV)
         menu.pack(fill='x', padx=px(14), pady=(px(40), 0))
@@ -257,6 +257,7 @@ class App(tk.Tk):
         self.target_entry = ttk.Entry(row, textvariable=self.target, font=ui.FONTS['input_lg'], style='Large.TEntry')
         self.target_entry.pack(side='left', fill='x', expand=True)
         self.target_entry.bind('<Return>', lambda e: self.apply_target())
+        ui.placeholder(self.target_entry, '인물·사건·제도 이름  (예: 숙빈 최씨, 대동법, 장희빈)', variable=self.target)
         self.target_button = ttk.Button(row, text='대상 적용', style='Outline.TButton', command=self.apply_target, cursor='hand2')
         self.target_button.pack(side='left', fill='y', padx=(px(10), 0))
         tk.Label(card, text='인물·사건·제도 이름을 입력하면 알려진 별칭을 검색어에 채웁니다.', bg=CARD, fg=MUTED,
@@ -277,7 +278,7 @@ class App(tk.Tk):
                              highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
                              selectbackground=ACCENT, selectforeground='white')
         self.terms.pack(fill='x', pady=(px(8), 0))
-        self.terms.insert('1.0', '\n'.join(default_profile()['quick_terms']))
+        ui.placeholder(self.terms, '연구 대상을 적용하면 이름과 별칭이 채워집니다. 직접 적어도 됩니다.\n예: 숙빈 최씨\n淑嬪崔氏')
 
         right = tk.Frame(cols, bg=CARD)
         right.grid(row=0, column=1, sticky='nsew', padx=(px(14), 0))
@@ -835,6 +836,8 @@ class App(tk.Tk):
         if not terms:
             messagebox.showerror('검색어', '검색어를 한 개 이상 입력하세요.', parent=self)
             return
+        if not self.target.get().strip():
+            self.target.set(terms[0])  # 연구 대상을 비워 두면 첫 검색어를 대상으로
         sources = self.selected_sources()
         if not sources and self.mode.get() not in ('본문 이어받기', '우선 본문 (최대 30건)'):
             messagebox.showinfo('자료원 선택', '자료원 연결에서 통합 검색할 사이트를 한 곳 이상 선택하세요.', parent=self)
@@ -1011,6 +1014,8 @@ if __name__ == '__main__':
         app.withdraw()
         app.output.set(str(test_output))
         app.mode.set('본문 이어받기')
+        app.target.set(default_profile()['target'])
+        app.terms.insert('1.0', '\n'.join(default_profile()['quick_terms']))
 
         def start_test():
             app.start()
