@@ -70,6 +70,15 @@ STATUS = {
 }
 
 
+def _terms_regex(terms):
+    """검색어들을 띄어쓰기와 무관하게 찾는 정규식(긴 말 먼저)."""
+    pats = []
+    for t in sorted({re.sub(r'\s+', '', t) for t in terms if t}, key=len, reverse=True):
+        if len(t) >= 2:
+            pats.append(r'\s*'.join(re.escape(ch) for ch in t))
+    return re.compile('|'.join(pats)) if pats else None
+
+
 SORTS = ('학습 추천순', '기본 점수순', '판정 필요순')
 
 
@@ -114,6 +123,10 @@ def _reading_text(parent, **kw):
     text.tag_configure('body', font=ui.FONTS['reading'], foreground=INK, spacing2=px(5))
     text.tag_configure('error', font=ui.FONTS['small'], foreground='#9A2F1F')
     text.tag_configure('link', font=ui.FONTS['small'], foreground=ACCENT)
+    # 검색어 강조: 놓인 자리 글꼴 크기에 맞춰 굵게 + 옅은 노랑
+    text.tag_configure('hit', font=ui.FONTS['reading_b'], background='#FFEFA8')
+    text.tag_configure('hit_small', font=ui.FONTS['small_b'], background='#FFEFA8')
+    text.tag_configure('hit_bg', background='#FFEFA8')
     return text
 
 
@@ -244,6 +257,8 @@ class ResultsWindow(tk.Toplevel):
         self.threshold = tk.StringVar(value='전체 후보')
         self.source_filter = tk.StringVar(value='모든 자료원')
         self.sort_mode = tk.StringVar(value=SORTS[0])
+        self.only_hits = tk.BooleanVar(value=False)
+        self.hl_terms, self.hl_re = [], None
         self.info = tk.StringVar()
         self.learn_info = tk.StringVar()
         self.judg = None
@@ -294,6 +309,8 @@ class ResultsWindow(tk.Toplevel):
         self.period_box.pack(side='left', padx=(0, px(6)))
         ttk.Combobox(controls, textvariable=self.threshold, state='readonly', width=10,
                      values=['전체 후보', '60점 이상', '80점 이상']).pack(side='left', padx=(0, px(6)))
+        ttk.Checkbutton(controls, text='검색어가 나온 문헌만', variable=self.only_hits, style='TCheckbutton',
+                        command=self.filter_rows, cursor='hand2').pack(side='left', padx=(px(10), 0))
         tk.Label(controls, text='정렬', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(10), px(8)))
         ttk.Combobox(controls, textvariable=self.sort_mode, state='readonly', width=12, values=SORTS).pack(side='left')
         ttk.Button(controls, text='새로고침', style='Quiet.TButton', command=self.reload, cursor='hand2').pack(side='right')
@@ -319,10 +336,10 @@ class ResultsWindow(tk.Toplevel):
         split.pack(fill='both', expand=True, padx=px(28), pady=(0, px(20)))
         upper = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         split.add(upper, weight=5)
-        self.tree = ttk.Treeview(upper, columns=('fav', 'rec', 'score', 'label', 'title', 'source', 'facets', 'year', 'status'),
+        self.tree = ttk.Treeview(upper, columns=('fav', 'hit', 'rec', 'score', 'label', 'title', 'source', 'facets', 'year', 'status'),
                                  show='headings', selectmode='extended', height=12)
-        centered = ('fav', 'rec', 'score', 'label', 'year')
-        for name, label, width in (('fav', '★', 30), ('rec', '추천', 48), ('score', '점수', 48), ('label', '판정', 42), ('title', '제목', 220),
+        centered = ('fav', 'hit', 'rec', 'score', 'label', 'year')
+        for name, label, width in (('fav', '★', 30), ('hit', '검색어', 52), ('rec', '추천', 48), ('score', '점수', 48), ('label', '판정', 42), ('title', '제목', 220),
                                    ('source', '자료집', 100), ('facets', '관점', 80), ('year', '연대', 56), ('status', '상태', 84)):
             self.tree.heading(name, text=label, anchor='center' if name in centered else 'w')
             self.tree.column(name, width=px(width), minwidth=px(40), stretch=name == 'title',
@@ -412,6 +429,7 @@ class ResultsWindow(tk.Toplevel):
             self.info.set(str(exc))
             return
         self.period_box.configure(values=['모든 연대'] + sorted({r['analysis']['period'] for r in self.rows}))
+        self._load_search_terms()
         self.judg = ranker.Judgments(self.folder, self.profile.get('target', ''))
         self._by_key = {r.get('key'): r for r in self.rows}
         self.index, self.wordspace, self.classifier = None, None, None
@@ -454,6 +472,8 @@ class ResultsWindow(tk.Toplevel):
                 continue
             if query and query not in row.get('_search', ''):
                 continue
+            if self.only_hits.get() and not row.get('_hit'):
+                continue
             self.filtered.append(row)
         self._sort(self.filtered)
         children = self.tree.get_children()
@@ -463,7 +483,7 @@ class ResultsWindow(tk.Toplevel):
         for i, row in self.shown.items():
             a = row['analysis']
             self.tree.insert('', 'end', iid=i, tags=('even' if int(i) % 2 == 0 else 'odd',),
-                             values=(self._fav_text(row), self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
+                             values=(self._fav_text(row), '✓' if row.get('_hit') else '', self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
                                      self._facet_text(row), a['year'] or '미상',
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
@@ -867,6 +887,51 @@ class ResultsWindow(tk.Toplevel):
     def selected(self):
         return [self.shown[key] for key in self.tree.selection() if key in self.shown]
 
+    # ── 검색어 표시 ──
+
+    def _load_search_terms(self):
+        """이번 검색에 쓴 검색어 + 연구 대상의 직접 명칭. 띄어쓰기는 무시하고 찾습니다(숙빈 최씨 = 숙빈최씨)."""
+        terms = []
+        try:
+            terms += json.loads((self.folder / 'active_queries.json').read_text(encoding='utf-8')).get('terms', [])
+        except (OSError, ValueError, AttributeError):
+            pass
+        prof = self.profile or {}
+        terms += list(prof.get('quick_terms', [])) + list(prof.get('direct_aliases', []))
+        if not terms and prof.get('target'):
+            terms.append(prof['target'])
+        for r in self.rows:
+            terms += [t for t in r.get('terms', []) or [] if isinstance(t, str)]
+        seen, clean = set(), []
+        for t in terms:
+            key = re.sub(r'\s+', '', str(t))
+            if len(key) >= 2 and key not in seen:
+                seen.add(key)
+                clean.append(str(t).strip())
+        self.hl_terms = clean
+        self.hl_re = _terms_regex(clean)
+        for r in self.rows:
+            text = ' '.join(str(r.get(k) or '') for k in ('title', 'snippet', 'body'))
+            r['_hit'] = bool(self.hl_re and self.hl_re.search(text))
+
+    def _highlight_terms(self, row):
+        for tag in ('hit', 'hit_small', 'hit_bg'):
+            self.detail.tag_remove(tag, '1.0', 'end')
+        extra = self.query.get().strip()
+        rx = _terms_regex(self.hl_terms + ([extra] if len(extra) >= 2 else []))
+        if rx is None:
+            return
+        text = self.detail.get('1.0', 'end-1c')
+        for m in rx.finditer(text):
+            start, end = f'1.0+{m.start()}c', f'1.0+{m.end()}c'
+            names = set(self.detail.tag_names(start))
+            if names & {'chip', 'chip2', 'chip_ok'}:
+                continue
+            tag = 'hit_bg' if 'title' in names else 'hit' if 'body' in names else 'hit_small'
+            self.detail.tag_add(tag, start, end)
+        for tag in ('hit_bg', 'hit_small', 'hit'):
+            self.detail.tag_raise(tag)
+
     def _write_detail(self, parts):
         self.detail.configure(state='normal')
         self.detail.delete('1.0', 'end')
@@ -903,6 +968,7 @@ class ResultsWindow(tk.Toplevel):
         if row.get('error'):
             parts += [('수집 오류\n', 'head'), (row['error'] + '\n', 'error')]
         self._write_detail(parts)
+        self._highlight_terms(row)
         self.detail.yview_moveto(0)
         self.refresh_topic_bar(row)
         self._mark_saved(row)

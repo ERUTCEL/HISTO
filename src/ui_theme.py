@@ -196,6 +196,8 @@ def apply_theme(root):
     body = _font(root, 'body', FAMILY, 10)
     small = _font(root, 'small', FAMILY, 9)
     _font(root, 'reading', FAMILY, 11)
+    _font(root, 'reading_b', FAMILY, 11, 'bold')
+    _font(root, 'small_b', FAMILY, 9, 'bold')
     _font(root, 'input', FAMILY, 11)
     _font(root, 'input_lg', FAMILY, 14)
     _font(root, 'h1', FAMILY, 19, 'bold')

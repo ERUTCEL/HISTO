@@ -31,11 +31,13 @@ MODES = (
     ('검색 목록만', '목록만'),
     ('본문 이어받기', '본문 이어받기'),
 )
+DEPTHS = (('사이트별 1쪽 (가장 적게)', 1), ('사이트별 3쪽 (권장)', 3), ('사이트별 5쪽', 5),
+          ('사이트별 10쪽', 10), ('끝까지 (제한 없음)', 0))
 MODE_HINTS = {
     '빠른 검색 (목록 우선)': '최대 20회 새 요청으로 서지·요약과 첫 목록을 모읍니다.',
     '우선 본문 (최대 30건)': '저장된 목록에서 60점 이상 후보를 점수순으로 최대 30건 받습니다.',
-    '전체 수집 / 이어받기': '요청 제한 없이 모든 후보 본문을 받습니다. 오래 걸릴 수 있습니다.',
-    '검색 목록만': '본문 없이 검색 목록만 저장합니다.',
+    '전체 수집 / 이어받기': '찾은 후보의 본문을 모두 받습니다. 오래 걸릴 수 있으니 검색 범위를 좁게 시작하세요.',
+    '검색 목록만': '본문 없이 검색 목록만 저장합니다. 사이트별로 볼 쪽 수는 아래 검색 범위에서 고릅니다.',
     '본문 이어받기': '저장된 목록에서 아직 받지 않은 본문을 이어서 받습니다.',
 }
 PAGES = (
@@ -296,6 +298,13 @@ class App(tk.Tk):
         self.mode_hint_label = tk.Label(right, textvariable=self.mode_hint, bg=CARD, fg=MUTED, font=ui.FONTS['small'],
                                         justify='left', anchor='w')
         self.mode_hint_label.pack(fill='x')
+        depth = tk.Frame(right, bg=CARD)
+        depth.pack(fill='x', pady=(px(8), 0))
+        tk.Label(depth, text='검색 범위', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
+        self.depth = tk.StringVar(value=DEPTHS[1][0])
+        self.depth_box = ttk.Combobox(depth, textvariable=self.depth, values=[d for d, _ in DEPTHS], state='disabled', width=22)
+        self.depth_box.pack(side='left')
+        tk.Label(depth, text=' 목록만 · 전체 수집에 적용', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
         right.bind('<Configure>', lambda e: self.mode_hint_label.configure(wraplength=max(px(200), e.width)))
 
         ui.hline(card).pack(fill='x', pady=(px(20), px(16)))
@@ -316,6 +325,8 @@ class App(tk.Tk):
         ttk.Button(buttons, textvariable=self.source_summary, style='Link.TButton', cursor='hand2',
                    command=lambda: self.show_page('sources')).pack(side='left', padx=(px(10), 0))
         ttk.Button(buttons, text='문헌 결과 보기  →', style='Large.TButton', command=self.view, cursor='hand2').pack(side='right')
+        self.reset_button = ttk.Button(buttons, text='↺ 검색 초기화', style='Link.TButton', command=self.reset_search, cursor='hand2')
+        self.reset_button.pack(side='right', padx=(0, px(10)))
         tk.Label(page, text='빠른 검색은 후보 목록부터 모읍니다. 필요한 문헌만 골라 본문을 받을 수 있습니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
 
@@ -773,6 +784,22 @@ class App(tk.Tk):
         else:
             self.library_empty.place(relx=0.5, rely=0.45, anchor='center')
 
+    def reset_search(self):
+        """연구 대상 · 검색어 · 검색 방식 · 범위 · 자료원 선택을 처음 상태로. 모은 자료는 지우지 않습니다."""
+        if self.running:
+            return
+        self.target.set('')
+        self.terms.delete('1.0', 'end')
+        self.terms.edit_modified(True)
+        self.mode.set(MODES[0][0])
+        self.depth.set(DEPTHS[1][0])
+        for s in SOURCES:
+            self.source_vars[s.id].set(s.mode != 'official')
+        self.sources_changed()
+        self.mode_changed()
+        self.state.set('검색 조건을 처음 상태로 되돌렸습니다. 모아 둔 문헌은 그대로 있습니다.')
+        self.target_entry.focus_set()
+
     def apply_target(self):
         if self.running:
             return
@@ -785,29 +812,19 @@ class App(tk.Tk):
         self.state.set('대상 적용: ' + name + ' · 다른 인물은 입력 이름만 직접 명칭으로 사용합니다. 별칭은 검색어에 추가하세요.')
 
     def mode_changed(self, event=None):
-        self.mode_hint.set(MODE_HINTS.get(self.mode.get(), ''))
-        profile = profile_for_target(self.target.get())
-        current = self.terms.get('1.0', 'end').strip().splitlines()
-        broad = self._broad_terms()
-        if self.mode.get() == '전체 수집 / 이어받기':
-            if profile['target'] == '숙빈 최씨' and current == profile['quick_terms']:
-                self.terms.delete('1.0', 'end')
-                self.terms.insert('1.0', '\n'.join(broad))
-            self.state.set('전체 수집: 요청 제한 없이 모든 후보 본문을 받습니다. 오래 걸릴 수 있습니다.')
-        elif self.mode.get() == '빠른 검색 (목록 우선)':
-            if current == broad:
-                self.apply_target()
-            self.state.set('빠른 검색: 최대 20회 새 요청. 연결 자료원의 서지·요약과 첫 목록을 모읍니다.')
-        elif self.mode.get() == '우선 본문 (최대 30건)':
+        mode = self.mode.get()
+        self.mode_hint.set(MODE_HINTS.get(mode, ''))
+        searching = mode in ('빠른 검색 (목록 우선)', '검색 목록만', '전체 수집 / 이어받기')
+        if hasattr(self, 'depth_box'):
+            self.depth_box.configure(state='readonly' if mode in ('검색 목록만', '전체 수집 / 이어받기') else 'disabled')
+        if mode == '전체 수집 / 이어받기':
+            self.state.set('전체 수집: 찾은 후보의 본문을 모두 받습니다. 오래 걸릴 수 있으니 검색 범위를 확인하세요.')
+        elif mode == '빠른 검색 (목록 우선)':
+            self.state.set('빠른 검색: 사이트마다 첫 쪽만, 최대 20회 요청으로 목록을 모읍니다.')
+        elif mode == '우선 본문 (최대 30건)':
             self.state.set('저장된 목록에서 60점 이상 후보를 점수순으로 최대 30건 받습니다. 누락 후보는 결과 보기에서 직접 선택할 수 있습니다.')
-
-    def _broad_terms(self):
-        if not hasattr(self, '_broad'):
-            try:
-                self._broad = json.loads((ROOT / 'queries.json').read_text(encoding='utf-8'))['terms']
-            except (OSError, ValueError, KeyError):
-                self._broad = []
-        return self._broad
+        elif not searching:
+            self.state.set('저장된 목록에서 아직 받지 않은 본문을 이어서 받습니다.')
 
     def choose(self):
         if self.running:
@@ -821,10 +838,15 @@ class App(tk.Tk):
 
     def _set_inputs(self, enabled):
         state = 'normal' if enabled else 'disabled'
-        for widget in (self.start_button, self.output_entry, self.choose_button, self.target_entry, self.target_button):
+        for widget in (self.start_button, self.output_entry, self.choose_button, self.target_entry, self.target_button,
+                       self.reset_button):
             widget.configure(state=state)
         for b in self.mode_buttons:
             b.configure(state=state)
+        if enabled:
+            self.mode_changed()
+        else:
+            self.depth_box.configure(state='disabled')
         self.terms.configure(state=state, bg=FIELD if enabled else '#F3F1EC')
         for check in self.source_checks:
             check.configure(state=state)
@@ -872,6 +894,10 @@ class App(tk.Tk):
                 cmd += ['--quick']
             if self.mode.get() == '검색 목록만':
                 cmd += ['--search-only']
+            if self.mode.get() in ('검색 목록만', '전체 수집 / 이어받기'):
+                pages = dict(DEPTHS).get(self.depth.get(), 3)
+                if pages:
+                    cmd += ['--max-pages', str(pages)]
             if self.mode.get() == '본문 이어받기':
                 cmd += ['--download-only']
             if self.mode.get() == '우선 본문 (최대 30건)':
