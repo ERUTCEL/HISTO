@@ -635,7 +635,7 @@ class App(tk.Tk):
         if window is None or not window.winfo_exists() or Path(window.folder) != folder.resolve():
             if window is not None and window.winfo_exists():
                 window.destroy()
-            self.result_window = ResultsWindow(self, folder, on_collect=self.collect_selected)
+            self.result_window = ResultsWindow(self, folder, on_collect=self.collect_selected, on_fetch=self.fetch_body)
             window = self.result_window
         window.query.set('')
         window.facet.set('모든 관점')
@@ -909,11 +909,14 @@ class App(tk.Tk):
         except Exception as exc:
             messagebox.showerror('실행 실패', str(exc), parent=self)
             return
+        self._launch(out, cmd, '실행 중입니다. 첫 목록이 저장되면 결과 보기에서 바로 읽을 수 있습니다.')
+
+    def _launch(self, out, cmd, message):
         self.active_out = out
         self.running = True
         self._set_inputs(False)
         self._set_busy(True)
-        self.state.set('실행 중입니다. 첫 목록이 저장되면 결과 보기에서 바로 읽을 수 있습니다.')
+        self.state.set(message)
         self.worker = threading.Thread(target=self.run_collection, args=(cmd,), daemon=True)
         self.worker.start()
 
@@ -1008,7 +1011,7 @@ class App(tk.Tk):
                 window.focus_force()
                 return
             window.destroy()
-        self.result_window = ResultsWindow(self, folder, on_collect=self.collect_selected)
+        self.result_window = ResultsWindow(self, folder, on_collect=self.collect_selected, on_fetch=self.fetch_body)
 
     def collect_selected(self, folder, keys, profile):
         if self.running:
@@ -1020,6 +1023,35 @@ class App(tk.Tk):
         self.mode.set('본문 이어받기')
         self.mode_hint.set(MODE_HINTS['본문 이어받기'])
         self.start(selected=keys, profile_override=profile)
+
+    def fetch_body(self, folder, keys, sources, profile=None):
+        """결과 창의 '본문 펼치기': 검색 조건은 그대로 두고 고른 문헌의 본문만 받습니다."""
+        if self.running:
+            messagebox.showinfo('수집 중', '지금 진행 중인 검색이 끝나면 본문을 펼칠 수 있습니다.',
+                                parent=getattr(self, 'result_window', None) or self)
+            return False
+        out = Path(folder).resolve()
+        try:
+            self.stop_file = out / 'stop.request'
+            self.stop_file.unlink(missing_ok=True)
+            selected_file = out / 'selected_keys.json'
+            selected_file.write_text(json.dumps(list(keys), ensure_ascii=False), encoding='utf-8')
+            profile_path = out / 'active_profile.json'
+            if profile and not profile_path.exists():
+                profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding='utf-8')
+            cmd = ['--output', str(out), '--stop-file', str(self.stop_file), '--download-only',
+                   '--selected-keys', str(selected_file)]
+            for name, flag in (('active_profile.json', '--profile'), ('active_queries.json', '--queries')):
+                if (out / name).exists():
+                    cmd += [flag, str(out / name)]
+            sources = sorted(set(sources) | set(self.selected_sources()))
+            if sources:
+                cmd += ['--sources', ','.join(sources)]
+        except OSError as exc:
+            messagebox.showerror('본문 받기 실패', str(exc), parent=getattr(self, 'result_window', None) or self)
+            return False
+        self._launch(out, cmd, f'문헌 {len(keys)}건의 본문을 원문 사이트에서 받는 중입니다.')
+        return True
 
     def close(self):
         if self.running:

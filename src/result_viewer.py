@@ -240,13 +240,15 @@ class RelationsWindow(tk.Toplevel):
 
 class ResultsWindow(tk.Toplevel):
 
-    def __init__(self, parent, folder, on_collect=None):
+    def __init__(self, parent, folder, on_collect=None, on_fetch=None):
         super().__init__(parent)
         apply_theme(self)
         self.title('문헌 결과 — 앱 안에서 보기')
         ui.fit_geometry(self, 1280, 860, 940, 620)
         self.folder = Path(folder).resolve()
         self.on_collect = on_collect
+        self.on_fetch = on_fetch
+        self._fetching = set()   # 본문을 받는 중인 문헌 키
         self.rows = []
         self.filtered = []
         self.shown = {}
@@ -389,6 +391,19 @@ class ResultsWindow(tk.Toplevel):
         self.detail.pack(side='left', fill='both', expand=True)
         self.detail.tag_configure('saved', background='#F5ECDA')
         self.detail.bind('<Button-3>', self._detail_menu)
+        # 본문 펼치기 단추(본문 칸 안의 글자 단추)
+        self.detail.tag_configure('action', font=ui.FONTS['label'], foreground='white', background=ACCENT,
+                                  spacing1=px(10), spacing3=px(4))
+        self.detail.tag_configure('action_off', font=ui.FONTS['label'], foreground=MUTED, background=NEUTRAL_PALE,
+                                  spacing1=px(10), spacing3=px(4))
+        self.detail.tag_bind('action', '<Button-1>', lambda e: self.expand_body())
+        self.detail.tag_bind('action', '<Enter>', lambda e: self.detail.configure(cursor='hand2'))
+        self.detail.tag_bind('action', '<Leave>', lambda e: self.detail.configure(cursor='arrow'))
+        self.detail.tag_bind('open_link', '<Button-1>', lambda e: self.open_original())
+        self.detail.tag_bind('open_link', '<Enter>', lambda e: self.detail.configure(cursor='hand2'))
+        self.detail.tag_bind('open_link', '<Leave>', lambda e: self.detail.configure(cursor='arrow'))
+        self.detail.tag_configure('open_link', font=ui.FONTS['label'], foreground=ACCENT, underline=True)
+        self.bind('<Return>', lambda e: self.expand_body() if e.widget in (self.tree, self.detail) else None)
         self._split = split
         split.bind('<Configure>', self._place_sash)
         self.reload()
@@ -419,6 +434,7 @@ class ResultsWindow(tk.Toplevel):
     def reload(self):
         try:
             self.rows, self.profile = read_results(self.folder)
+            self._fetching.clear()
         except Exception as exc:
             self.rows, self.filtered, self.shown = [], [], {}
             children = self.tree.get_children()
@@ -964,7 +980,18 @@ class ResultsWindow(tk.Toplevel):
         if row.get('body'):
             parts += [('본문\n', 'head'), (row['body'] + '\n', 'body')]
         else:
-            parts += [('본문 미수집 — 검색 요약\n', 'head'), (row.get('snippet', '요약 없음') + '\n', 'body')]
+            parts += [('검색 화면에 보인 일부\n', 'head'),
+                      ((row.get('snippet') or '(검색 화면에 보인 글이 없습니다)') + '\n', 'body')]
+            if not row.get('download_supported', True):
+                parts += [('\n이 자료는 사이트가 서지·요약만 공개합니다. 본문은 원문 사이트에서 보세요.  ', 'note'),
+                          ('↗ 원문 사이트 열기', 'open_link'), ('\n', None)]
+            elif row.get('key') in self._fetching:
+                parts += [('\n', None), ('  본문을 받아 오는 중입니다…  ', 'action_off'),
+                          ('\n받는 대로 이 자리에 펼쳐집니다.\n', 'note')]
+            else:
+                parts += [('\n', None), ('  ▼ 본문 펼치기  ', 'action'),
+                          ('\n원문 사이트에서 이 문헌의 본문 전체를 받아 이 자리에 펼칩니다. (Enter 키)\n', 'note'),
+                          ('↗ 원문 사이트 열기', 'open_link'), ('\n', None)]
         if row.get('error'):
             parts += [('수집 오류\n', 'head'), (row['error'] + '\n', 'error')]
         self._write_detail(parts)
@@ -972,6 +999,26 @@ class ResultsWindow(tk.Toplevel):
         self.detail.yview_moveto(0)
         self.refresh_topic_bar(row)
         self._mark_saved(row)
+
+    def expand_body(self):
+        """선택한 문헌(여러 건 가능) 중 본문이 없는 것의 본문을 받아 펼칩니다."""
+        rows = [r for r in self.selected() if not r.get('body') and r.get('download_supported', True)
+                and r.get('key') not in self._fetching]
+        if not rows:
+            return
+        if self.on_fetch is None:
+            self.collect_selected()
+            return
+        sources = set()
+        for r in rows:
+            for key in r.get('source_ids') or ['history' if r.get('kind') == 'db' else r.get('kind')]:
+                key = 'history' if key == 'db' else key
+                if key in BY_ID:
+                    sources.add(key)
+        keys = [r['key'] for r in rows]
+        if self.on_fetch(self.folder, keys, sources, self.profile):
+            self._fetching.update(keys)
+            self.show_selected()
 
     def copy_url(self):
         rows = self.selected()
