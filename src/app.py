@@ -6,7 +6,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 import traceback
 import sqlite3
 import collector
@@ -15,7 +15,8 @@ from result_viewer import ResultsWindow, RelationsWindow
 from source_connectors import SOURCES, BY_ID, AUTO_IDS
 from browser_links import open_web_url
 import ui_theme as ui
-from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE,
+import bookmarks as bm
+from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_STRONG,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
                       NAV_MUTED, NAV_LINE)
 
@@ -41,6 +42,7 @@ PAGES = (
     ('search', '통합 검색', '흩어진 기록을 하나의 연구로. 공식 자료원의 기록을 모으고 근거를 따라 살펴보세요.'),
     ('sources', '자료원 연결', '7곳의 서지·목록을 앱에 통합하고, 3곳은 공식 검색 화면으로 연결합니다.'),
     ('library', '내 문헌', '다시 찾을 수 있는 연구 기록. 이전 버전의 수집 결과도 그대로 읽을 수 있습니다.'),
+    ('favorites', '즐겨찾기', '읽다가 남겨 둔 문헌과 발췌를 분류별로 모아 봅니다. 분류마다 파일로 저장되어 메모장·워드로도 열립니다.'),
     ('activity', '진행 기록', '자료원 응답과 수집 상태를 기록합니다. 첫 목록이 저장되면 결과 창에서 바로 확인하세요.'),
 )
 
@@ -116,6 +118,7 @@ class App(tk.Tk):
         self.stats = {key: tk.StringVar(value='0') for key in ('sites', 'selected', 'records', 'bodies')}
         self.stats['sites'].set(str(len(SOURCES)))
         self.stats['selected'].set(str(len(AUTO_IDS)))
+        self.bookmarks = bm.BookmarkStore()
         self._build_sidebar()
 
         self.main = tk.Frame(self, bg=BG)
@@ -151,6 +154,7 @@ class App(tk.Tk):
         self._build_sources(self.pages['sources'])
         self._build_library(self.pages['library'])
         self._build_activity(self.pages['activity'])
+        self._build_favorites(self.pages['favorites'])
         self.sources_changed()
         self.show_page('search')
         self.protocol('WM_DELETE_WINDOW', self.close)
@@ -387,6 +391,272 @@ class App(tk.Tk):
                                       text='아직 이 보관함에 저장된 문헌이 없습니다.\n통합 검색을 실행하거나 기존 결과 폴더를 선택하세요.')
         self.library_empty.place(relx=0.5, rely=0.45, anchor='center')
 
+    # ── 즐겨찾기 ──────────────────────────────────────────
+
+    def _build_favorites(self, page):
+        tools = tk.Frame(page, bg=BG)
+        tools.pack(fill='x', pady=(0, px(12)))
+        tk.Label(tools, text='찾기', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
+        self.fav_query = tk.StringVar()
+        e = ttk.Entry(tools, textvariable=self.fav_query, width=28)
+        e.pack(side='left')
+        self.fav_query.trace_add('write', lambda *a: self.refresh_bookmarks())
+        ttk.Button(tools, text='파일 폴더 열기', command=self._fav_open_dir, cursor='hand2').pack(side='right')
+        ttk.Button(tools, text='이 분류 CSV로 내보내기', command=self._fav_export, cursor='hand2').pack(side='right', padx=(0, px(8)))
+
+        body = tk.Frame(page, bg=BG)
+        body.pack(fill='both', expand=True)
+        left = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE, width=px(220))
+        left.pack(side='left', fill='y')
+        left.pack_propagate(False)
+        tk.Label(left, text='분류', bg=CARD, fg=MUTED, font=ui.FONTS['label_sm']).pack(anchor='w', padx=px(14), pady=(px(12), px(6)))
+        self.fav_cats = ttk.Treeview(left, columns=('name', 'n'), show='', selectmode='browse', height=10)
+        self.fav_cats.column('name', width=px(150), stretch=True)
+        self.fav_cats.column('n', width=px(40), anchor='e', stretch=False)
+        self.fav_cats.pack(fill='both', expand=True, padx=px(6))
+        self.fav_cats.bind('<<TreeviewSelect>>', lambda e: self._fav_fill_items())
+        self.fav_cats.bind('<Double-1>', lambda e: self._fav_rename())
+        btns = tk.Frame(left, bg=CARD)
+        btns.pack(fill='x', padx=px(10), pady=px(10))
+        ttk.Button(btns, text='＋ 새 분류', command=self._fav_new, cursor='hand2').pack(fill='x')
+        row = tk.Frame(btns, bg=CARD)
+        row.pack(fill='x', pady=(px(6), 0))
+        ttk.Button(row, text='이름 바꾸기', style='Quiet.TButton', command=self._fav_rename, cursor='hand2').pack(side='left')
+        ttk.Button(row, text='분류 삭제', style='Quiet.TButton', command=self._fav_delete, cursor='hand2').pack(side='right')
+
+        right = tk.Frame(body, bg=BG)
+        right.pack(side='left', fill='both', expand=True, padx=(px(12), 0))
+        table = tk.Frame(right, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        table.pack(fill='both', expand=True)
+        self.fav_items = ttk.Treeview(table, columns=('kind', 'title', 'source', 'year', 'cat', 'saved'), show='headings',
+                                      selectmode='extended', height=8)
+        for key, label, width in (('kind', '종류', 54), ('title', '제목 / 발췌', 360), ('source', '자료집', 110),
+                                  ('year', '연대', 56), ('cat', '분류', 110), ('saved', '저장일', 78)):
+            self.fav_items.heading(key, text=label, anchor='w')
+            self.fav_items.column(key, width=px(width), stretch=key == 'title', anchor='w')
+        self.fav_items.tag_configure('odd', background='#FBFAF7')
+        sc = ttk.Scrollbar(table, orient='vertical', command=self.fav_items.yview, style='Card.Vertical.TScrollbar')
+        self.fav_items.configure(yscrollcommand=sc.set)
+        sc.pack(side='right', fill='y')
+        self.fav_items.pack(side='left', fill='both', expand=True)
+        self.fav_items.bind('<<TreeviewSelect>>', lambda e: self._fav_show())
+        self.fav_items.bind('<Double-1>', lambda e: self._fav_open_result())
+        self.fav_items.bind('<Delete>', lambda e: self._fav_remove())
+        self.fav_empty = tk.Label(table, bg=CARD, fg=MUTED, font=ui.FONTS['body'], justify='center',
+                                  text='아직 즐겨찾기가 없습니다.\n문헌 결과 창에서 ☆ 즐겨찾기(F) 또는 본문을 끌어 선택한 뒤 ❝ 선택 부분 저장(Ctrl+S)을 누르세요.')
+
+        detail = ui.card(right, 18, 14)
+        detail.pack(fill='x', pady=(px(12), 0))
+        self.fav_title = tk.Label(detail, text='', bg=CARD, fg=INK, font=ui.FONTS['h3'], anchor='w', justify='left')
+        self.fav_title.pack(fill='x')
+        self.fav_cite = tk.Label(detail, text='', bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w', justify='left')
+        self.fav_cite.pack(fill='x', pady=(px(2), px(6)))
+        detail.bind('<Configure>', lambda e: (self.fav_title.configure(wraplength=e.width - px(40)),
+                                              self.fav_cite.configure(wraplength=e.width - px(40))))
+        self.fav_text = tk.Text(detail, height=4, wrap='word', font=ui.FONTS['body'], relief='flat', bg=FIELD, fg=INK,
+                                padx=px(10), pady=px(8), highlightthickness=1, highlightbackground=LINE, state='disabled')
+        self.fav_text.pack(fill='x')
+        note_row = tk.Frame(detail, bg=CARD)
+        note_row.pack(fill='x', pady=(px(8), 0))
+        tk.Label(note_row, text='메모', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', anchor='n', padx=(0, px(8)))
+        self.fav_note = tk.Text(note_row, height=2, wrap='word', font=ui.FONTS['body'], relief='flat', bg=CARD, fg=INK,
+                                padx=px(8), pady=px(6), highlightthickness=1, highlightbackground=LINE_STRONG, highlightcolor=ACCENT)
+        self.fav_note.pack(side='left', fill='x', expand=True)
+        self.fav_note.bind('<FocusOut>', lambda e: self._fav_save_note())
+        acts = tk.Frame(detail, bg=CARD)
+        acts.pack(fill='x', pady=(px(8), 0))
+        tk.Label(acts, text='분류 옮기기', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(6)))
+        self.fav_move = tk.StringVar()
+        self.fav_move_box = ttk.Combobox(acts, textvariable=self.fav_move, state='readonly', width=14,
+                                         postcommand=lambda: self.fav_move_box.configure(values=self.bookmarks.names()))
+        self.fav_move_box.pack(side='left')
+        self.fav_move_box.bind('<<ComboboxSelected>>', lambda e: self._fav_move_selected())
+        ttk.Button(acts, text='즐겨찾기 해제', style='Quiet.TButton', command=self._fav_remove, cursor='hand2').pack(side='right')
+        ttk.Button(acts, text='공식 원문 ↗', style='Quiet.TButton', command=self._fav_open_url, cursor='hand2').pack(side='right')
+        ttk.Button(acts, text='결과 창에서 열기', style='Outline.TButton', command=self._fav_open_result, cursor='hand2').pack(side='right', padx=(0, px(6)))
+        self._fav_current = None
+
+    def refresh_bookmarks(self):
+        if not hasattr(self, 'fav_cats'):
+            return
+        store = self.bookmarks
+        chosen = self._fav_category()
+        self.fav_cats.delete(*self.fav_cats.get_children())
+        self.fav_cats.insert('', 'end', iid='__all__', values=('전체', len(store.items())))
+        for name in store.names():
+            self.fav_cats.insert('', 'end', iid='cat:' + name, values=(name, len(store.items(name))))
+        target = '__all__' if chosen is None else 'cat:' + chosen
+        if not self.fav_cats.exists(target):
+            target = '__all__'
+        self.fav_cats.selection_set(target)
+        self._fav_fill_items()
+
+    def _fav_category(self):
+        sel = self.fav_cats.selection() if hasattr(self, 'fav_cats') else ()
+        if not sel or sel[0] == '__all__':
+            return None
+        return sel[0][4:]
+
+    def _fav_fill_items(self):
+        store = self.bookmarks
+        keep = set(self.fav_items.selection())
+        items = store.items(self._fav_category())
+        q = self.fav_query.get().strip().casefold()
+        if q:
+            items = [it for it in items if q in ' '.join(str(it.get(k) or '') for k in ('title', 'text', 'note', 'source')).casefold()]
+        self.fav_items.delete(*self.fav_items.get_children())
+        for i, it in enumerate(items):
+            label = it['title'] if it['kind'] == '문헌' else '❝ ' + ' '.join((it.get('text') or '').split())[:80]
+            self.fav_items.insert('', 'end', iid=it['id'], tags=('odd',) if i % 2 else (),
+                                  values=('★ 문헌' if it['kind'] == '문헌' else '❝ 발췌', label, it.get('source', ''),
+                                          it.get('year', ''), it['category'], it.get('saved_at', '')[2:10].replace('-', '.')))
+        if items:
+            self.fav_empty.place_forget()
+            again = [i for i in keep if self.fav_items.exists(i)]
+            self.fav_items.selection_set(again or [items[0]['id']])
+        else:
+            self.fav_empty.place(relx=0.5, rely=0.45, anchor='center')
+            self._fav_show()
+
+    def _fav_selected(self):
+        return [self.bookmarks.by_id[i] for i in self.fav_items.selection() if i in self.bookmarks.by_id]
+
+    def _fav_show(self):
+        self._fav_save_note()
+        items = self._fav_selected()
+        it = items[0] if items else None
+        self._fav_current = it['id'] if it else None
+        self.fav_title.configure(text=(it['title'] if it else '항목을 고르세요'))
+        self.fav_cite.configure(text=('출처: ' + bm.citation(it) + f"  ·  {it['kind']} · 분류 {it['category']}") if it else '')
+        self.fav_text.configure(state='normal')
+        self.fav_text.delete('1.0', 'end')
+        if it:
+            self.fav_text.insert('1.0', it.get('text') or '(내용 없음)')
+        self.fav_text.configure(state='disabled')
+        self.fav_note.delete('1.0', 'end')
+        if it:
+            self.fav_note.insert('1.0', it.get('note') or '')
+            self.fav_move.set(it['category'])
+        self._fav_note_loaded = it.get('note', '') if it else ''
+
+    def _fav_save_note(self):
+        cur = getattr(self, '_fav_current', None)
+        if not cur or cur not in self.bookmarks.by_id:
+            return
+        text = self.fav_note.get('1.0', 'end').strip()
+        if text != (self._fav_note_loaded or ''):
+            self.bookmarks.update(cur, note=text)
+            self._fav_note_loaded = text
+
+    def _fav_new(self):
+        name = simpledialog.askstring('새 분류', '분류 이름 (예: 추숭 논쟁, 궁방 경제)', parent=self)
+        if name:
+            made = self.bookmarks.create(name)
+            if not made:
+                messagebox.showinfo('새 분류', '이름이 비었거나 이미 있는 분류입니다.', parent=self)
+                return
+            self.refresh_bookmarks()
+            self.fav_cats.selection_set('cat:' + made)
+
+    def _fav_rename(self):
+        cat = self._fav_category()
+        if cat in (None, bm.UNSORTED):
+            messagebox.showinfo('이름 바꾸기', '직접 만든 분류를 고르세요. \'전체\'와 \'미분류\'는 바꿀 수 없습니다.', parent=self)
+            return
+        name = simpledialog.askstring('이름 바꾸기', '새 이름', initialvalue=cat, parent=self)
+        if name and name != cat:
+            made = self.bookmarks.rename(cat, name)
+            if not made:
+                messagebox.showinfo('이름 바꾸기', '이름이 비었거나 이미 있는 분류입니다.', parent=self)
+                return
+            self.refresh_bookmarks()
+            self.fav_cats.selection_set('cat:' + made)
+
+    def _fav_delete(self):
+        cat = self._fav_category()
+        if cat in (None, bm.UNSORTED):
+            messagebox.showinfo('분류 삭제', '직접 만든 분류를 고르세요.', parent=self)
+            return
+        n = len(self.bookmarks.items(cat))
+        if messagebox.askyesno('분류 삭제', f'「{cat}」 분류를 지울까요?\n안의 {n}건은 지워지지 않고 \'미분류\'로 옮겨집니다.', parent=self):
+            self.bookmarks.delete(cat)
+            self.refresh_bookmarks()
+
+    def _fav_move_selected(self):
+        target = self.fav_move.get()
+        for it in self._fav_selected():
+            self.bookmarks.move(it['id'], target)
+        self.refresh_bookmarks()
+
+    def _fav_remove(self):
+        items = self._fav_selected()
+        if not items:
+            return
+        if len(items) > 1 and not messagebox.askyesno('즐겨찾기 해제', f'{len(items)}건을 즐겨찾기에서 뺄까요?', parent=self):
+            return
+        self._fav_current = None
+        for it in items:
+            self.bookmarks.remove(it['id'])
+        self.refresh_bookmarks()
+        window = getattr(self, 'result_window', None)
+        if window is not None and window.winfo_exists():
+            window.filter_rows()
+
+    def _fav_open_url(self):
+        items = self._fav_selected()
+        if items and items[0].get('url'):
+            try:
+                open_web_url(items[0]['url'])
+            except Exception as exc:
+                messagebox.showerror('원문 열기', str(exc), parent=self)
+
+    def _fav_open_result(self):
+        items = self._fav_selected()
+        if not items:
+            return
+        it = items[0]
+        folder = Path(it.get('result_folder') or '')
+        if not any((folder / n).exists() for n in ('collection.sqlite3', 'documents.jsonl')):
+            messagebox.showinfo('결과 창에서 열기', f'원래 결과 폴더를 찾을 수 없습니다.\n{folder}\n저장한 내용은 즐겨찾기에 그대로 남아 있습니다.', parent=self)
+            return
+        window = getattr(self, 'result_window', None)
+        if window is None or not window.winfo_exists() or Path(window.folder) != folder.resolve():
+            if window is not None and window.winfo_exists():
+                window.destroy()
+            self.result_window = ResultsWindow(self, folder, on_collect=self.collect_selected)
+            window = self.result_window
+        window.query.set('')
+        window.facet.set('모든 관점')
+        window.period.set('모든 연대')
+        window.threshold.set('전체 후보')
+        window.source_filter.set('모든 자료원')
+        window.filter_rows()
+        window.deiconify()
+        window.lift()
+        window.focus_key(it.get('key'))
+
+    def _fav_export(self):
+        cat = self._fav_category()
+        name = cat or '전체'
+        path = filedialog.asksaveasfilename(parent=self, title='즐겨찾기 내보내기', defaultextension='.csv',
+                                            initialfile=f'즐겨찾기_{name}.csv', filetypes=[('CSV (엑셀)', '*.csv')])
+        if path:
+            try:
+                self.bookmarks.export_csv(cat, path)
+                self.state.set(f'즐겨찾기 「{name}」을 저장했습니다: {path}')
+            except OSError as exc:
+                messagebox.showerror('내보내기', str(exc), parent=self)
+
+    def _fav_open_dir(self):
+        try:
+            self.bookmarks.dir.mkdir(parents=True, exist_ok=True)
+            if os.name == 'nt':
+                os.startfile(str(self.bookmarks.dir))
+            else:
+                messagebox.showinfo('즐겨찾기 폴더', str(self.bookmarks.dir), parent=self)
+        except OSError as exc:
+            messagebox.showerror('폴더 열기', str(exc), parent=self)
+
     # ── 진행 기록 ──────────────────────────────────────────
 
     def _build_activity(self, page):
@@ -421,6 +691,8 @@ class App(tk.Tk):
             b.set_active(name == key)
         if key == 'library':
             self.refresh_counts()
+        if key == 'favorites':
+            self.refresh_bookmarks()
 
     def _update_back(self):
         # 돌아갈 화면이 있을 때만 '← 뒤로'를 제목 앞에 보입니다.

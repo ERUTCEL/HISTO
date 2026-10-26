@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from collections import Counter
 
 import functools
@@ -18,6 +18,7 @@ from browser_links import open_web_url
 import ranker
 import textlab as tl
 import mtl
+import bookmarks as bm
 from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
@@ -69,7 +70,7 @@ STATUS = {
 }
 
 
-SORTS = ('학습 추천순', '규칙 점수순', '판정 필요순')
+SORTS = ('학습 추천순', '기본 점수순', '판정 필요순')
 
 
 def read_results(folder, profile=None):
@@ -255,6 +256,9 @@ class ResultsWindow(tk.Toplevel):
         self._by_key = {}
         self.lab = None
         self.annot_task = tk.StringVar(value='주제')
+        self.bm = getattr(parent, 'bookmarks', None) or bm.BookmarkStore()
+        self.save_cat = tk.StringVar(value=bm.UNSORTED)
+        self.bm_msg = tk.StringVar()
 
         top = tk.Frame(self, bg=CARD)
         top.pack(fill='x')
@@ -315,10 +319,10 @@ class ResultsWindow(tk.Toplevel):
         split.pack(fill='both', expand=True, padx=px(28), pady=(0, px(20)))
         upper = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         split.add(upper, weight=5)
-        self.tree = ttk.Treeview(upper, columns=('rec', 'score', 'label', 'title', 'source', 'facets', 'year', 'status'),
+        self.tree = ttk.Treeview(upper, columns=('fav', 'rec', 'score', 'label', 'title', 'source', 'facets', 'year', 'status'),
                                  show='headings', selectmode='extended', height=12)
-        centered = ('rec', 'score', 'label', 'year')
-        for name, label, width in (('rec', '추천', 50), ('score', '규칙', 50), ('label', '판정', 44), ('title', '제목', 230),
+        centered = ('fav', 'rec', 'score', 'label', 'year')
+        for name, label, width in (('fav', '★', 30), ('rec', '추천', 48), ('score', '점수', 48), ('label', '판정', 42), ('title', '제목', 220),
                                    ('source', '자료집', 100), ('facets', '관점', 80), ('year', '연대', 56), ('status', '상태', 84)):
             self.tree.heading(name, text=label, anchor='center' if name in centered else 'w')
             self.tree.column(name, width=px(width), minwidth=px(40), stretch=name == 'title',
@@ -332,6 +336,9 @@ class ResultsWindow(tk.Toplevel):
         self.tree.tag_configure('odd', background='#FBFAF7')
         for key, label in (('1', 1), ('0', 0), ('<Delete>', None), ('<BackSpace>', None)):
             self.tree.bind(key, lambda e, v=label: self.judge(v))
+        self.tree.bind('f', lambda e: self.toggle_favorite())
+        self.tree.bind('<Button-3>', self._tree_menu)
+        self.bind('<Control-s>', lambda e: self.save_selection_or_doc())
 
         lower = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         split.add(lower, weight=4)
@@ -342,6 +349,18 @@ class ResultsWindow(tk.Toplevel):
         ttk.Button(bar, text='✓ 관련 있음  1', style='Outline.TButton', command=lambda: self.judge(1), cursor='hand2').pack(side='left', pady=px(6))
         ttk.Button(bar, text='✕ 관련 없음  0', command=lambda: self.judge(0), cursor='hand2').pack(side='left', padx=(px(6), 0), pady=px(6))
         ttk.Button(bar, text='지우기', style='Quiet.TButton', command=lambda: self.judge(None), cursor='hand2').pack(side='left', padx=(px(2), 0))
+        fav = tk.Frame(lower, bg=HEAD)
+        fav.pack(side='top', fill='x')
+        self.fav_button = ttk.Button(fav, text='☆ 즐겨찾기', style='Quiet.TButton', command=self.toggle_favorite, cursor='hand2')
+        self.fav_button.pack(side='left', padx=(px(8), 0), pady=(0, px(4)))
+        ttk.Button(fav, text='❝ 선택 부분 저장', style='Quiet.TButton', command=self.save_selection, cursor='hand2').pack(side='left', pady=(0, px(4)))
+        tk.Label(fav, text='분류', bg=HEAD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(8), px(4)))
+        self.cat_box = ttk.Combobox(fav, textvariable=self.save_cat, state='readonly', width=12,
+                                    postcommand=lambda: self.cat_box.configure(values=self.bm.names() + ['＋ 새 분류…']))
+        self.cat_box.pack(side='left')
+        self.cat_box.bind('<<ComboboxSelected>>', self._category_chosen)
+        tk.Label(fav, textvariable=self.bm_msg, bg=HEAD, fg=OK_INK, font=ui.FONTS['label_sm']).pack(side='left', padx=px(8))
+        ui.hline(lower, LINE).pack(side='top', fill='x')
         self.topic_bar = tk.Frame(lower, bg=HEAD)
         self.topic_bar.pack(side='top', fill='x')
         self.topic_vars = {}
@@ -351,6 +370,8 @@ class ResultsWindow(tk.Toplevel):
         self.detail.configure(yscrollcommand=dscroll.set)
         dscroll.pack(side='right', fill='y')
         self.detail.pack(side='left', fill='both', expand=True)
+        self.detail.tag_configure('saved', background='#F5ECDA')
+        self.detail.bind('<Button-3>', self._detail_menu)
         self._split = split
         split.bind('<Configure>', self._place_sash)
         self.reload()
@@ -442,12 +463,12 @@ class ResultsWindow(tk.Toplevel):
         for i, row in self.shown.items():
             a = row['analysis']
             self.tree.insert('', 'end', iid=i, tags=('even' if int(i) % 2 == 0 else 'odd',),
-                             values=(self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
+                             values=(self._fav_text(row), self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
                                      self._facet_text(row), a['year'] or '미상',
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
-        self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 / 필터 {len(self.filtered)}건 / 화면 {len(self.shown)}건 · 관련성 점수순'
-                      '  ·  분류 후보(복수 태그): ' + ' · '.join(f'{name} {counts[name]}건' for name in ('정치사', '사회사', '제도사')))
+        self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시'
+                      '  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in ('정치사', '사회사', '제도사')))
         if self.shown:
             again = [i for i, row in self.shown.items() if keep and row.get('key') in keep]
             self.tree.selection_set(again or ['0'])
@@ -526,7 +547,7 @@ class ResultsWindow(tk.Toplevel):
         box = ttk.Combobox(top, textvariable=self.annot_task, values=tasks, state='readonly', width=10)
         box.pack(side='left')
         box.bind('<<ComboboxSelected>>', lambda e: self.refresh_topic_bar())
-        tk.Label(top, text=' ✎ 주석됨' if ann is not None else ' 미주석 · 괄호는 규칙/모델', bg=HEAD,
+        tk.Label(top, text=' ✎ 표시함' if ann is not None else ' 아직 표시 안 함 · 괄호 안은 제안', bg=HEAD,
                  fg=ACCENT if ann is not None else MUTED, font=ui.FONTS['label_sm']).pack(side='left')
         if key:
             for text, command in (('지우기', lambda: self.save_topics(clear=True)), ('해당 없음', self.no_topics),
@@ -594,6 +615,169 @@ class ResultsWindow(tk.Toplevel):
         for n, v in self.topic_vars.items():
             v.set(n in suggestion)
         self.save_topics()
+
+    # ── 즐겨찾기 ──
+
+    def _fav_text(self, row):
+        key = row.get('key')
+        if self.bm.document_bookmark(self.folder, key):
+            return '★'
+        if self.bm.excerpts_of(self.folder, key):
+            return '❝'
+        return ''
+
+    def _refresh_fav_cells(self, rows):
+        for iid, row in self.shown.items():
+            if row in rows:
+                self.tree.set(iid, 'fav', self._fav_text(row))
+        parent = self.master
+        if hasattr(parent, 'refresh_bookmarks'):
+            parent.refresh_bookmarks()
+
+    def _flash(self, text):
+        self.bm_msg.set(text)
+        self.after(2200, lambda: self.winfo_exists() and self.bm_msg.get() == text and self.bm_msg.set(''))
+
+    def _category_chosen(self, _=None):
+        if self.save_cat.get() == '＋ 새 분류…':
+            self.save_cat.set(self.new_category() or bm.UNSORTED)
+
+    def new_category(self):
+        name = simpledialog.askstring('새 분류', '분류 이름 (예: 추숭 논쟁, 궁방 경제)', parent=self)
+        if not name:
+            return None
+        made = self.bm.create(name)
+        if not made:
+            messagebox.showinfo('새 분류', '이름이 비었거나 이미 있는 분류입니다.', parent=self)
+            return None
+        return made
+
+    def _mark_saved(self, row):
+        self.detail.tag_remove('saved', '1.0', 'end')
+        key = row.get('key') if row else None
+        doc = self.bm.document_bookmark(self.folder, key) if key else None
+        self.fav_button.configure(text=f'★ 즐겨찾기됨 · {doc["category"]}' if doc else '☆ 즐겨찾기')
+        if not key:
+            return
+        for it in self.bm.excerpts_of(self.folder, key):
+            probe = (it.get('text') or '').strip()
+            if not probe:
+                continue
+            start = self.detail.search(probe[:80], '1.0', 'end')
+            if start:
+                self.detail.tag_add('saved', start, f'{start}+{len(probe)}c')
+
+    def toggle_favorite(self, category=None):
+        rows = self.selected()
+        if not rows:
+            return 'break'
+        category = category or self.save_cat.get()
+        if category not in self.bm.names():
+            category = bm.UNSORTED
+        all_saved = all(self.bm.document_bookmark(self.folder, r.get('key')) for r in rows)
+        for row in rows:
+            it = self.bm.document_bookmark(self.folder, row.get('key'))
+            if all_saved and it:
+                self.bm.remove(it['id'])
+            elif not it:
+                self.bm.add(row, self.folder, category=category)
+        self._flash('해제됨' if all_saved else '저장 ✓')
+        self._refresh_fav_cells(rows)
+        self._mark_saved(rows[0])
+        return 'break'
+
+    def _selected_text(self):
+        try:
+            return self.detail.get('sel.first', 'sel.last').strip()
+        except tk.TclError:
+            return ''
+
+    def save_selection(self, category=None):
+        rows = self.selected()
+        text = self._selected_text()
+        if not rows:
+            return
+        if not text:
+            messagebox.showinfo('선택 부분 저장', '오른쪽 본문에서 저장할 부분을 마우스로 끌어 선택한 뒤 누르세요.', parent=self)
+            return
+        category = category or self.save_cat.get()
+        if category not in self.bm.names():
+            category = bm.UNSORTED
+        self.bm.add(rows[0], self.folder, text=text, category=category)
+        self._flash(f'발췌 {len(text)}자 저장 ✓')
+        self._refresh_fav_cells(rows[:1])
+        self._mark_saved(rows[0])
+
+    def save_selection_or_doc(self):
+        if self._selected_text():
+            self.save_selection()
+        else:
+            row = (self.selected() or [None])[0]
+            if row is not None and not self.bm.document_bookmark(self.folder, row.get('key')):
+                self.toggle_favorite()
+        return 'break'
+
+    def _category_menu(self, parent, command):
+        sub = tk.Menu(parent, tearoff=0)
+        for name in self.bm.names():
+            sub.add_command(label=name, command=lambda n=name: command(n))
+        sub.add_separator()
+
+        def make_and_run():
+            made = self.new_category()
+            if made:
+                self.save_cat.set(made)
+                command(made)
+        sub.add_command(label='새 분류 만들기…', command=make_and_run)
+        return sub
+
+    def _detail_menu(self, event):
+        menu = tk.Menu(self, tearoff=0)
+        has_sel = bool(self._selected_text())
+        menu.add_cascade(label='선택 부분 저장 →', menu=self._category_menu(menu, lambda n: self.save_selection(n)),
+                         state='normal' if has_sel else 'disabled')
+        menu.add_cascade(label='이 문헌 즐겨찾기 →', menu=self._category_menu(menu, lambda n: self._fav_to(n)))
+        if has_sel:
+            menu.add_separator()
+            menu.add_command(label='복사', command=lambda: (self.clipboard_clear(), self.clipboard_append(self._selected_text())))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _tree_menu(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid and iid not in self.tree.selection():
+            self.tree.selection_set(iid)
+            self.show_selected()
+        if not self.selected():
+            return
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_cascade(label='즐겨찾기 →', menu=self._category_menu(menu, lambda n: self._fav_to(n)))
+        if any(self.bm.document_bookmark(self.folder, r.get('key')) for r in self.selected()):
+            menu.add_command(label='즐겨찾기 해제', command=self._unfav)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _fav_to(self, category):
+        rows = self.selected()
+        for row in rows:
+            it = self.bm.document_bookmark(self.folder, row.get('key'))
+            if it:
+                self.bm.move(it['id'], category)
+            else:
+                self.bm.add(row, self.folder, category=category)
+        self._flash('저장 ✓')
+        self._refresh_fav_cells(rows)
+        if rows:
+            self._mark_saved(rows[0])
+
+    def _unfav(self):
+        rows = self.selected()
+        for row in rows:
+            it = self.bm.document_bookmark(self.folder, row.get('key'))
+            if it:
+                self.bm.remove(it['id'])
+        self._flash('해제됨')
+        self._refresh_fav_cells(rows)
+        if rows:
+            self._mark_saved(rows[0])
 
     # ── 판정 · 학습 ──
 
@@ -705,26 +889,13 @@ class ResultsWindow(tk.Toplevel):
         if label is not None:
             parts += [(' ✓ 관련 ' if label == 1 else ' ✕ 무관 ', 'chip_ok' if label == 1 else 'chip2'), ('  ', None)]
         parts += [
-            (f" 규칙 {a['score']}점 ", 'chip2' if p is not None else 'chip'), ('  ', None),
-            (f" {', '.join(a['facets']) or '미분류'} ", 'chip2'), ('  ', None),
+            (f" {', '.join(sorted(self._topics_of(row))) or '미분류'} ", 'chip2'), ('  ', None),
             (f" {a['year'] or '연대 미상'} ", 'chip2'), ('  ', None),
             (f" {status} ", 'chip2'), ('\n', 'meta'),
             (row.get('title', '(제목 없음)') + '\n', 'title'),
             (row.get('source', '') + '\n', 'meta'),
             (row.get('url', '') + '\n', 'link'),
         ]
-        if p is not None:
-            why = self.model.contributions(ranker.features(row))
-            parts.append(('추천 근거 — 내 판정에서 배운 가중치\n', 'head'))
-            parts.append(('\n'.join(f"{'+' if c > 0 else '−'}{abs(c):.2f}  {name}" for name, c in why) + '\n', 'note'))
-        parts += [
-            ('점수 근거 — 확률 아님\n', 'head'),
-            ('\n'.join(a['score_reasons']) + '\n', 'note'),
-            (f"분석 근거: {a['basis']} / 기록 연대: {a['year'] or '미상'}\n연대 근거: {a['year_source'] or '명시 연대 없음'}\n", 'note'),
-        ]
-        for name, evidence in a['facets'].items():
-            parts.append((f'{name} · 자동 분류 후보\n', 'head'))
-            parts.append(('\n'.join(e['term'] + ' → ' + e['evidence'] for e in evidence[:3]) + '\n', 'note'))
         if row.get('body'):
             parts += [('본문\n', 'head'), (row['body'] + '\n', 'body')]
         else:
@@ -734,6 +905,7 @@ class ResultsWindow(tk.Toplevel):
         self._write_detail(parts)
         self.detail.yview_moveto(0)
         self.refresh_topic_bar(row)
+        self._mark_saved(row)
 
     def copy_url(self):
         rows = self.selected()
@@ -798,8 +970,7 @@ class PerformanceWindow(tk.Toplevel):
         trow.pack(anchor='w')
         ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.destroy, cursor='hand2').pack(side='left', padx=(0, px(10)))
         tk.Label(trow, text='추천 성능', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
-        tk.Label(inner, text='판정한 문헌만 놓고, 규칙 점수 순위와 학습 추천 순위가 내 판정을 얼마나 잘 맞히는지 비교합니다.\n'
-                             '학습 추천은 교차검증 값입니다(각 문헌을 그 문헌의 판정을 보지 않은 모델로 채점).',
+        tk.Label(inner, text='내가 관련/무관을 표시한 문헌을 기준으로, 기본 점수 순서와 학습 추천 순서 중 어느 쪽이 더 잘 맞히는지 비교합니다.',
                  bg=CARD, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(4), 0))
         ui.hline(head, LINE).pack(fill='x')
         body = ui.ScrollFrame(self)
@@ -828,7 +999,7 @@ class PerformanceWindow(tk.Toplevel):
         table = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         table.pack(fill='x', pady=(px(16), 0))
         table.columnconfigure(0, weight=1)
-        for c, text in enumerate(('지표', '규칙 점수', '학습 추천')):
+        for c, text in enumerate(('기준', '기본 점수 순서', '학습 추천 순서')):
             tk.Label(table, text=text, bg=HEAD, fg=MUTED, font=ui.FONTS['label_sm'], anchor='w' if c == 0 else 'center',
                      padx=px(14), pady=px(8)).grid(row=0, column=c, sticky='nsew')
 
@@ -841,8 +1012,8 @@ class PerformanceWindow(tk.Toplevel):
             tk.Label(table, text=fmt(rule), bg=CARD, fg=INK, font=ui.FONTS['body'], width=10).grid(row=r, column=1, sticky='nsew')
             tk.Label(table, text=fmt(learned), bg=CARD, fg=ACCENT if better else INK,
                      font=ui.FONTS['label'] if better else ui.FONTS['body'], width=10).grid(row=r, column=2, sticky='nsew')
-        tk.Label(page, text=f'참고: 판정한 문헌 중 관련 비율은 {fmt(ev["base"])}입니다. 아무렇게나 순서를 매기면 Precision이 이 값, AUC가 50%가 됩니다.\n'
-                            '판정한 문헌 안에서만 잰 값이라, 판정을 고르게(위·아래 순위 모두) 할수록 믿을 만합니다.',
+        tk.Label(page, text=f'참고: 표시한 문헌 중 관련 비율은 {fmt(ev["base"])}입니다. 아무렇게나 늘어놓아도 \'상위 몇 건 중 관련 비율\'은 이 값, 마지막 줄은 50%가 나옵니다.\n'
+                            '목록 위·아래를 고르게 표시할수록 믿을 만합니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(8), 0))
 
         if parent.model.trained:
@@ -851,7 +1022,7 @@ class PerformanceWindow(tk.Toplevel):
             cols.pack(fill='x', pady=(px(16), 0))
             cols.columnconfigure(0, weight=1, uniform='w')
             cols.columnconfigure(1, weight=1, uniform='w')
-            for c, (title, items, color) in enumerate((('관련 쪽으로 올리는 근거', up, OK_INK), ('무관 쪽으로 내리는 근거', down, '#9A2F1F'))):
+            for c, (title, items, color) in enumerate((('추천을 올리는 특징', up, OK_INK), ('추천을 내리는 특징', down, '#9A2F1F'))):
                 box = ui.card(cols, 18, 14)
                 box.grid(row=0, column=c, sticky='nsew', padx=(0, px(8)) if c == 0 else 0)
                 tk.Label(box, text=title, bg=CARD, fg=INK, font=ui.FONTS['h3']).pack(anchor='w', pady=(0, px(6)))
@@ -862,5 +1033,5 @@ class PerformanceWindow(tk.Toplevel):
                     tk.Label(line, text=f'{w:+.2f}', bg=CARD, fg=color, font=ui.FONTS['label_sm']).pack(side='right')
                 if not items:
                     tk.Label(box, text='아직 없음', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
-        tk.Label(page, text='판정은 결과 폴더의 judgments.json · judgments.csv에 저장되어 연구 기록으로 남습니다.',
+        tk.Label(page, text='표시한 내용은 결과 폴더의 judgments.csv(엑셀로 열림)에 남습니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w', pady=(px(14), 0))

@@ -117,8 +117,8 @@ def describe(name):
     if kind == 'status':
         value = STATUS_NAMES.get(value, value)
     return {
-        'rule': '규칙 점수', 'year_known': '연대 확인됨', 'rel_n': '공동 등장 수',
-        'why': f'규칙 「{value}」', 'alias': f'명칭 「{value}」', 'basis': f'근거: {value}',
+        'rule': '기본 점수', 'year_known': '연대 확인됨', 'rel_n': '공동 등장 수',
+        'why': f'{value}', 'alias': f'명칭 「{value}」', 'basis': f'근거: {value}',
         'status': f'상태: {value}', 'src': f'자료집: {value}', 'facet': f'관점: {value}',
         'period': f'연대: {value}', 'with': f'함께 나온 말: {value}', 'term': f'검색어: {value}',
         'w': f'낱말: {value}',
@@ -251,8 +251,8 @@ def evaluate(data):
     rr = ranked(rule)
     lr = ranked(learned) if learned else None
     for k in (5, 10, 20):
-        out['rows'].append((f'상위 {k}건 중 관련 비율 (Precision@{k})',
+        out['rows'].append((f'상위 {k}건 중 관련 문헌 비율',
                             precision_at(rr, k), precision_at(lr, k) if lr else None))
-    out['rows'].append(('관련이 무관보다 위에 올 확률 (AUC)', auc(rule, labels), auc(learned, labels) if learned else None))
+    out['rows'].append(('관련 문헌이 무관 문헌보다 위에 있을 확률', auc(rule, labels), auc(learned, labels) if learned else None))
     out['base'] = sum(labels) / len(labels) if labels else None
     return out

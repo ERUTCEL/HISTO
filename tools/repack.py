@@ -38,7 +38,32 @@ assert header[:4] == b'PYZ\0'
 toc_off = struct.unpack('!i', pyz[8:12])[0]
 items = marshal.loads(pyz[toc_off:])
 names = [n for n, _ in items]
-APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui', 'mtl')  # 바꾸거나 새로 넣을 앱 모듈
+
+# EXE에 없는 표준 모듈을 새로 import하면 실행하자마자 멈추므로 먼저 막습니다.
+_have = set(names) | set(sys.builtin_module_names) | {'tkinter.font'} | {p.stem for p in src_dir.glob('*.py')}
+for _e in toc:
+    if _e['name'] == 'base_library.zip' or _e['name'].endswith('base_library.zip'):
+        import io, zipfile
+        _raw = data[start + _e['pos']:start + _e['pos'] + _e['clen']]
+        _raw = zlib.decompress(_raw) if _e['flag'] else _raw
+        _have |= {n[:-4].replace('/', '.').removesuffix('.__init__') for n in zipfile.ZipFile(io.BytesIO(_raw)).namelist() if n.endswith('.pyc')}
+import ast as _ast
+_missing = []
+for _f in sorted(src_dir.glob('*.py')):
+    for _n in _ast.walk(_ast.parse(_f.read_text(encoding='utf-8'))):
+        _mods = [a.name for a in _n.names] if isinstance(_n, _ast.Import) else \
+            [_n.module] if isinstance(_n, _ast.ImportFrom) and _n.level == 0 and _n.module else []
+        _mods += [f'{_n.module}.{a.name}' for a in _n.names] if isinstance(_n, _ast.ImportFrom) and _n.module == 'tkinter' else []
+        for _m in _mods:
+            if _m.startswith('tkinter.') and _m.split('.')[1] in ('TclError', 'Tk', 'Toplevel', 'Frame'):
+                continue
+            if _m not in _have and not any(h == _m or h.startswith(_m + '.') for h in _have):
+                if not (_m.startswith('tkinter.') and _m.split('.')[1][0].isupper()):
+                    _missing.append(f'{_f.name}: {_m}')
+if _missing:
+    sys.exit('EXE에 없는 모듈을 씁니다(실행 시 멈춤):\n  ' + '\n  '.join(_missing))
+
+APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui', 'mtl', 'bookmarks')  # 바꾸거나 새로 넣을 앱 모듈
 replace, add = {}, {}
 for mod in APP_MODULES:
     entry = (0, code_of(src_dir / f'{mod}.py', f'{mod}.py'))
