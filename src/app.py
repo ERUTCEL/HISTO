@@ -1,5 +1,7 @@
 """독립 실행파일 또는 python app.py로 시작."""
+from datetime import datetime
 import json
+import re
 import os
 from pathlib import Path
 import queue
@@ -22,6 +24,8 @@ from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LI
 
 ROOT = Path(__file__).resolve().parent
 APP_HOME = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
+RESULTS_HOME = APP_HOME / '수집결과'
+SEARCH_MODES = ('빠른 검색 (목록 우선)', '검색 목록만', '전체 수집 / 이어받기')
 VERSION = '3.1'
 
 MODES = (
@@ -784,6 +788,34 @@ class App(tk.Tk):
         else:
             self.library_empty.place(relx=0.5, rely=0.45, anchor='center')
 
+    @staticmethod
+    def _has_results(folder):
+        return any((folder / name).exists() for name in ('collection.sqlite3', 'documents.jsonl'))
+
+    def _search_folder(self, out, target, terms):
+        """검색마다 결과 폴더를 나눕니다. 같은 대상·같은 검색어면 그 폴더에 이어 저장하고,
+        검색어가 바뀌었거나 '검색 초기화' 뒤라면 새 폴더를 만듭니다(이전 결과와 섞이지 않게)."""
+        fresh = getattr(self, '_fresh_next', False)
+        self._fresh_next = False
+        if not self._has_results(out):
+            return out
+        if not fresh:
+            try:
+                prev_terms = json.loads((out / 'active_queries.json').read_text(encoding='utf-8')).get('terms')
+                prev_target = json.loads((out / 'active_profile.json').read_text(encoding='utf-8')).get('target')
+                if prev_terms == terms and (prev_target or '') == target:
+                    return out
+            except (OSError, ValueError, AttributeError):
+                pass
+        base = RESULTS_HOME if out == RESULTS_HOME.resolve() or out.parent == RESULTS_HOME.resolve() else out.parent
+        name = re.sub(r'[\\/:*?"<>|\r\n\t]', ' ', target or terms[0]).strip()[:40] or '검색'
+        folder = base / f"{name} {datetime.now():%Y-%m-%d %H%M}"
+        n = 2
+        while folder.exists():
+            folder = base / f"{name} {datetime.now():%Y-%m-%d %H%M} ({n})"
+            n += 1
+        return folder
+
     def reset_search(self):
         """연구 대상 · 검색어 · 검색 방식 · 범위 · 자료원 선택을 처음 상태로. 모은 자료는 지우지 않습니다."""
         if self.running:
@@ -797,7 +829,11 @@ class App(tk.Tk):
             self.source_vars[s.id].set(s.mode != 'official')
         self.sources_changed()
         self.mode_changed()
-        self.state.set('검색 조건을 처음 상태로 되돌렸습니다. 모아 둔 문헌은 그대로 있습니다.')
+        self._fresh_next = True
+        self.stats['records'].set('0')
+        self.stats['bodies'].set('0')
+        self._fill_recent([])
+        self.state.set('검색 조건을 처음 상태로 되돌렸습니다. 다음 검색은 새 폴더에 따로 저장됩니다(이전 결과는 그대로 보관).')
         self.target_entry.focus_set()
 
     def apply_target(self):
@@ -866,6 +902,13 @@ class App(tk.Tk):
             self.show_page('sources')
             return
         out = Path(self.output.get()).resolve()
+        if selected is None and profile_override is None and self.mode.get() in SEARCH_MODES:
+            new_out = self._search_folder(out, self.target.get().strip(), terms)
+            if new_out != out:
+                self.output.set(str(new_out))
+                self.refresh_counts()
+                self._log_note = f'새 검색이라 결과를 새 폴더에 따로 저장합니다: {new_out.name}\n'
+            out = new_out
         profile = profile_override or profile_for_target(self.target.get())
         saved_profile = out / 'active_profile.json'
         if not profile_override and saved_profile.exists():
@@ -909,7 +952,10 @@ class App(tk.Tk):
         except Exception as exc:
             messagebox.showerror('실행 실패', str(exc), parent=self)
             return
-        self._launch(out, cmd, '실행 중입니다. 첫 목록이 저장되면 결과 보기에서 바로 읽을 수 있습니다.')
+        note, self._log_note = getattr(self, '_log_note', ''), ''
+        if note:
+            self._append_log(note)
+        self._launch(out, cmd, (note.strip() + ' · ' if note else '') + '실행 중입니다. 첫 목록이 저장되면 결과 보기에서 바로 읽을 수 있습니다.')
 
     def _launch(self, out, cmd, message):
         self.active_out = out
