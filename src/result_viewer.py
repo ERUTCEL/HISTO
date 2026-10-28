@@ -331,7 +331,7 @@ class ResultsWindow(tk.Toplevel):
         controls = tk.Frame(top, bg=CARD)
         controls.pack(fill='x', padx=px(28), pady=(px(14), px(16)))
         tk.Label(controls, text='찾기', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
-        self.query_entry = ttk.Entry(controls, textvariable=self.query, width=24)
+        self.query_entry = ttk.Entry(controls, textvariable=self.query, width=16)
         self.query_entry.pack(side='left', padx=(0, px(10)))
         self.source_box = ttk.Combobox(controls, textvariable=self.source_filter, state='readonly', width=13,
                                        values=['모든 자료원'] + [s.short for s in BY_ID.values()])
@@ -345,7 +345,13 @@ class ResultsWindow(tk.Toplevel):
                      values=['전체 후보', '60점 이상', '80점 이상']).pack(side='left', padx=(0, px(6)))
         ttk.Checkbutton(controls, text='검색어가 나온 문헌만', variable=self.only_hits, style='TCheckbutton',
                         command=self.filter_rows, cursor='hand2').pack(side='left', padx=(px(10), 0))
-        tk.Label(controls, text='정렬', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(10), px(8)))
+        # '우선 본문 30건'으로 고른 문헌만 보기(그 방식으로 돌린 폴더에서만 나타남)
+        self.only_priority = tk.BooleanVar(value=True)
+        self.priority_keys = None
+        self.priority_check = ttk.Checkbutton(controls, text='우선 30건만', variable=self.only_priority, style='TCheckbutton',
+                                              command=self.filter_rows, cursor='hand2')
+        self.priority_anchor = tk.Label(controls, text='정렬', bg=CARD, fg=MUTED, font=ui.FONTS['small'])
+        self.priority_anchor.pack(side='left', padx=(px(10), px(8)))
         ttk.Combobox(controls, textvariable=self.sort_mode, state='readonly', width=12, values=SORTS).pack(side='left')
         ttk.Button(controls, text='새로고침', style='Quiet.TButton', command=self.reload, cursor='hand2').pack(side='right')
         for variable in (self.query, self.facet, self.period, self.threshold, self.source_filter, self.sort_mode):
@@ -485,6 +491,7 @@ class ResultsWindow(tk.Toplevel):
             rows_for_hanja = list(self.rows)   # 사료에 쓰인 '한글(漢字)' 표기를 한자 변환 후보로
             threading.Thread(target=lambda: hanja_input.learn_pairs(rows_for_hanja), daemon=True).start()
             self._struct = {}
+            self._load_priority()
         except Exception as exc:
             self.rows, self.filtered, self.shown = [], [], {}
             children = self.tree.get_children()
@@ -504,6 +511,19 @@ class ResultsWindow(tk.Toplevel):
         self.refresh_topic_bar()
         self._train(full=True)
         self.filter_rows()
+
+    def _load_priority(self):
+        try:
+            data = json.loads((self.folder / 'priority.json').read_text(encoding='utf-8'))
+            keys = data.get('keys') or []
+        except (OSError, ValueError, AttributeError):
+            keys = []
+        self.priority_keys = set(keys) or None
+        if self.priority_keys:
+            self.priority_check.configure(text=f'우선 {len(self.priority_keys)}건만')
+            self.priority_check.pack(side='left', padx=(px(10), 0), before=self.priority_anchor)
+        else:
+            self.priority_check.pack_forget()
 
     def schedule_filter(self, *args):
         if self._timer:
@@ -538,6 +558,8 @@ class ResultsWindow(tk.Toplevel):
                 continue
             if query and query not in row.get('_search', ''):
                 continue
+            if self.priority_keys and self.only_priority.get() and row.get('key') not in self.priority_keys:
+                continue
             if self.only_hits.get() and not row.get('_hit'):
                 continue
             self.filtered.append(row)
@@ -553,7 +575,8 @@ class ResultsWindow(tk.Toplevel):
                                      self._facet_text(row), a['year'] or '미상',
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
-        self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시'
+        prio = (f'  ·  우선 본문: 관련성 높은 {len(self.priority_keys)}건만 보는 중' if self.priority_keys and self.only_priority.get() else '')
+        self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))
         if self.shown:

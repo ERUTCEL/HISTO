@@ -39,11 +39,13 @@ MODES = (
     ('검색 목록만', '목록만'),
     ('본문 이어받기', '본문 이어받기'),
 )
+PRIORITY_N = 30                 # 우선 본문: 관련성 높은 문헌 수
+PRIORITY_FILE = 'priority.json'  # 고른 문헌 목록(결과 창이 이 문헌만 보여 줌)
 DEPTHS = (('사이트별 1쪽 (가장 적게)', 1), ('사이트별 3쪽 (권장)', 3), ('사이트별 5쪽', 5),
           ('사이트별 10쪽', 10), ('끝까지 (제한 없음)', 0))
 MODE_HINTS = {
     '빠른 검색 (목록 우선)': '최대 20회 새 요청으로 서지·요약과 첫 목록을 모읍니다.',
-    '우선 본문 (최대 30건)': '새 검색어면 검색한 뒤 60점 이상 후보의 본문을 점수순으로 최대 30건 받습니다. 같은 검색어면 저장된 목록에서 이어 받습니다.',
+    '우선 본문 (최대 30건)': '새 검색어면 빠른 검색(사이트마다 첫 쪽, 최대 20회 요청)으로 목록을 모은 뒤 60점 이상 상위 30건의 본문만 받습니다. 같은 검색어면 저장된 목록에서 이어 받습니다.',
     '전체 수집 / 이어받기': '찾은 후보의 본문을 모두 받습니다. 오래 걸릴 수 있으니 검색 범위를 좁게 시작하세요.',
     '검색 목록만': '본문 없이 검색 목록만 저장합니다. 사이트별로 볼 쪽 수는 아래 검색 범위에서 고릅니다.',
     '본문 이어받기': '저장된 목록에서 아직 받지 않은 본문을 이어서 받습니다.',
@@ -955,13 +957,13 @@ class App(tk.Tk):
         self.mode_hint.set(MODE_HINTS.get(mode, ''))
         searching = mode in ('빠른 검색 (목록 우선)', '검색 목록만', '전체 수집 / 이어받기')
         if hasattr(self, 'depth_box'):
-            self.depth_box.configure(state='readonly' if mode in ('검색 목록만', '전체 수집 / 이어받기', '우선 본문 (최대 30건)') else 'disabled')
+            self.depth_box.configure(state='readonly' if mode in ('검색 목록만', '전체 수집 / 이어받기') else 'disabled')
         if mode == '전체 수집 / 이어받기':
             self.state.set('전체 수집: 찾은 후보의 본문을 모두 받습니다. 오래 걸릴 수 있으니 검색 범위를 확인하세요.')
         elif mode == '빠른 검색 (목록 우선)':
             self.state.set('빠른 검색: 사이트마다 첫 쪽만, 최대 20회 요청으로 목록을 모읍니다.')
         elif mode == '우선 본문 (최대 30건)':
-            self.state.set('우선 본문: 새 검색어면 새 폴더에서 검색 후 60점 이상 후보 본문을 최대 30건, 같은 검색어면 저장된 목록에서 이어 받습니다.')
+            self.state.set('우선 본문: 새 검색어면 빠른 검색으로 목록을 모은 뒤 상위 30건 본문만, 같은 검색어면 저장된 목록에서 이어 받습니다.')
         elif not searching:
             self.state.set('저장된 목록에서 아직 받지 않은 본문을 이어서 받습니다.')
 
@@ -1061,14 +1063,19 @@ class App(tk.Tk):
                 cmd += ['--quick']
             if mode == '검색 목록만':
                 cmd += ['--search-only']
-            if mode in ('검색 목록만', '전체 수집 / 이어받기') or (mode == '우선 본문 (최대 30건)' and fresh):
+            if mode in ('검색 목록만', '전체 수집 / 이어받기'):
                 pages = dict(DEPTHS).get(self.depth.get(), 3)
                 if pages:
                     cmd += ['--max-pages', str(pages)]
             if mode == '본문 이어받기':
                 cmd += ['--download-only']
             if mode == '우선 본문 (최대 30건)':
-                cmd += ([] if fresh else ['--download-only']) + ['--min-score', '60', '--max-documents', '30']
+                # ① (새 검색어면) 빠른 검색으로 후보 목록 → ② 관련성 높은 30건 고르기 → ③ 그 30건 본문 받기
+                picked = out / 'selected_keys.json'
+                download = cmd + ['--download-only', '--selected-keys', str(picked)]
+                cmd = ([cmd + ['--quick']] if fresh else []) + [('select', str(out), PRIORITY_N), download]
+            else:
+                (out / PRIORITY_FILE).unlink(missing_ok=True)   # 다른 방식으로 다시 돌리면 '우선 30건' 표시 해제
             if selected is not None:
                 selected_file = out / 'selected_keys.json'
                 selected_file.write_text(json.dumps(selected, ensure_ascii=False), encoding='utf-8')
@@ -1092,12 +1099,44 @@ class App(tk.Tk):
         self.worker.start()
 
     def run_collection(self, args):
-        try:
-            result = collector.main(args, log_stream=QueueStream(self.events))
-        except BaseException:
-            self.events.put(('log', traceback.format_exc()))
-            result = 1
+        """args 하나, 또는 차례로 돌릴 여러 단계(우선 본문: 빠른 검색 → 30건 고르기 → 본문 받기)."""
+        steps = args if args and isinstance(args[0], (list, tuple)) else [args]
+        labels = {'quick': '후보 목록 모으기(빠른 검색)', 'select': '관련성 높은 문헌 고르기', 'download': '고른 문헌 본문 받기'}
+        result = 0
+        for i, step in enumerate(steps):
+            if i and (result not in (0, None) or (self.stop_file and self.stop_file.exists())):
+                break   # 앞 단계가 실패했거나 중단을 눌렀으면 다음 단계는 하지 않음
+            kind = 'select' if isinstance(step, tuple) else 'quick' if '--quick' in step else 'download'
+            if len(steps) > 1:
+                self.events.put(('log', f'── {i + 1}/{len(steps)} 단계: {labels[kind]} ──\n'))
+            try:
+                if kind == 'select':
+                    result = self._pick_priority(Path(step[1]), step[2])
+                else:
+                    result = collector.main(step, log_stream=QueueStream(self.events))
+            except BaseException:
+                self.events.put(('log', traceback.format_exc()))
+                result = 1
         self.events.put(('done', result))
+
+    def _pick_priority(self, out, n):
+        """모은 후보 중 관련성 점수가 높은 n건을 고릅니다(다른 인물 등 0점 이하는 제외).
+        본문을 받을 수 있는 것만 다음 단계로 넘기고, 고른 목록은 결과 창이 그 문헌만 보여 주도록 남깁니다."""
+        from result_viewer import read_results
+        rows, _ = read_results(out)
+        ranked = sorted((r for r in rows if r['analysis']['score'] > 0),
+                        key=lambda r: (-r['analysis']['score'], str(r.get('key'))))[:n]
+        keys = [r.get('key') for r in ranked]
+        fetch = [r.get('key') for r in ranked if r.get('download_supported', True) and not r.get('body')]
+        (out / 'selected_keys.json').write_text(json.dumps(fetch, ensure_ascii=False), encoding='utf-8')
+        (out / PRIORITY_FILE).write_text(json.dumps({'keys': keys, 'candidates': len(rows)}, ensure_ascii=False), encoding='utf-8')
+        high = sum(1 for r in ranked if r['analysis']['score'] >= 60)
+        self.events.put(('log', f'후보 {len(rows)}건 중 관련성 높은 {len(keys)}건을 골랐습니다(60점 이상 {high}건). '
+                                f'본문을 받을 문헌 {len(fetch)}건.\n'))
+        if not keys:
+            self.events.put(('log', '고를 만한 후보가 없습니다. 검색어를 바꾸거나 빠른 검색으로 목록을 확인해 보세요.\n'))
+            return 1
+        return 0 if fetch else 2   # 받을 본문이 없으면 다음 단계 생략
 
     LOG_LIMIT = 4000  # 진행 기록 창에 남길 최대 줄 수
 
