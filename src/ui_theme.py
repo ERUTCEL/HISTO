@@ -165,6 +165,42 @@ def _check_image(root, size, gap, fill, border, mark):
     return img
 
 
+def _tab_image(root, fill, border, left, top, right, size=24):
+    """탭 바탕(9칸 늘리기용). 아래쪽은 본문과 이어지게 테두리 없음."""
+    img = tk.PhotoImage(master=root, width=size, height=size)
+    rows = []
+    for y in range(size):
+        row = []
+        for x in range(size):
+            edge = y < top or x < left or x >= size - right
+            row.append(border if edge else fill)
+        rows.append('{' + ' '.join(row) + '}')
+    img.put(' '.join(rows), to=(0, 0))
+    return img
+
+
+_TAB_IMAGES = {}
+
+
+def _install_tabs(root, style):
+    """고른 탭: 쪽빛 굵은 테두리(위 3·옆 2), 나머지: 얇은 회색 테두리."""
+    side, top = max(2, px(2)), max(3, px(3))
+    imgs = _TAB_IMAGES.setdefault(str(root.tk), {
+        'normal': _tab_image(root, NEUTRAL_PALE, LINE, 1, 1, 1),
+        'active': _tab_image(root, '#ECE8DF', LINE, 1, 1, 1),
+        'selected': _tab_image(root, CARD, ACCENT, side, top, side),
+    })
+    try:
+        style.element_create('Histro.Notebook.tab', 'image', imgs['normal'],
+                             ('selected', imgs['selected']), ('active', imgs['active']),
+                             border=(top + 1, top + 1, top + 1, 1), sticky='nsew')
+    except tk.TclError:
+        return   # 이미 만든 경우
+    style.layout('TNotebook.Tab', [('Histro.Notebook.tab', {'sticky': 'nswe', 'children': [
+        ('Notebook.padding', {'side': 'top', 'sticky': 'nswe', 'children': [
+            ('Notebook.label', {'side': 'top', 'sticky': ''})]})]})])
+
+
 def semi(root, name, size):
     """세미볼드 글꼴(없으면 굵게)."""
     if FAMILY_SEMI:
@@ -344,9 +380,14 @@ def apply_theme(root):
     style.configure('Card.Vertical.TScrollbar', troughcolor=CARD, bordercolor=CARD)
 
     # 탭, 표
-    style.configure('TNotebook', background=BG, borderwidth=0)
+    style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(px(4), px(6), px(4), 0))
     style.configure('TNotebook.Tab', padding=(px(18), px(9)), background=NEUTRAL_PALE, bordercolor=LINE)
-    style.map('TNotebook.Tab', background=[('selected', CARD)], foreground=[('selected', ACCENT)])
+    # 고른 탭은 더 크고 굵게(clam 기본값은 고른 탭을 오히려 작게 만듭니다)
+    style.map('TNotebook.Tab', background=[('selected', CARD), ('active', '#ECE8DF')],
+              foreground=[('selected', ACCENT)], font=[('selected', FONTS['label'])],
+              padding=[('selected', (px(22), px(12)))], expand=[('selected', (px(3), px(4), px(3), 0))],
+              lightcolor=[('selected', ACCENT)], bordercolor=[('selected', ACCENT)])
+    _install_tabs(root, style)
     style.configure('Treeview', background=CARD, fieldbackground=CARD, foreground=INK, rowheight=px(34),
                     borderwidth=0, bordercolor=CARD, lightcolor=CARD, darkcolor=CARD, font=body)
     style.layout('Treeview', [('Treeview.treearea', {'sticky': 'nswe'})])

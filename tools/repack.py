@@ -7,7 +7,7 @@ Everything in the original archive is copied byte-for-byte except:
   - 'app' (entry script)                   -> src_dir/app.py
   - PYZ: ui_theme, result_viewer           -> src_dir/*.py
   - PYZ: + ranker (new), + tkinter.font (stdlib, was not bundled before)
-  - + fonts/*.otf and fonts/*.txt as data files (extracted next to the modules)
+  - + fonts/* and data/* (hanja dictionary) as data files (extracted next to the modules)
 """
 import marshal
 from pathlib import Path
@@ -63,7 +63,7 @@ for _f in sorted(src_dir.glob('*.py')):
 if _missing:
     sys.exit('EXE에 없는 모듈을 씁니다(실행 시 멈춤):\n  ' + '\n  '.join(_missing))
 
-APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui', 'mtl', 'bookmarks', 'reader', 'history_fields', 'settings')  # 바꾸거나 새로 넣을 앱 모듈
+APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui', 'mtl', 'bookmarks', 'reader', 'history_fields', 'settings', 'hanja_input')  # 바꾸거나 새로 넣을 앱 모듈
 replace, add = {}, {}
 for mod in APP_MODULES:
     entry = (0, code_of(src_dir / f'{mod}.py', f'{mod}.py'))
@@ -92,7 +92,7 @@ new_pyz = bytes(new_pyz)
 
 # ── CArchive ──
 app_code = code_of(src_dir / 'app.py', 'app.py')
-extra = sorted((src_dir / 'fonts').glob('*'))
+extra = [('fonts', f) for f in sorted((src_dir / 'fonts').glob('*'))] + [('data', f) for f in sorted((src_dir / 'data').glob('*'))]
 entries = []  # (name, flag, typ, raw_bytes, ulen)
 for e in toc:
     raw = data[start + e['pos']:start + e['pos'] + e['clen']]
@@ -104,9 +104,9 @@ for e in toc:
     else:
         entries.append((e['name'], e['flag'], e['typ'], raw, e['ulen']))
 insert_at = next(i for i, e in enumerate(entries) if e[0] == 'queries.json')
-for f in extra:
+for folder, f in extra:
     u = f.read_bytes()
-    entries.insert(insert_at, ('fonts\\' + f.name, 1, 'b', zlib.compress(u, 9), len(u)))
+    entries.insert(insert_at, (folder + '\\' + f.name, 1, 'b', zlib.compress(u, 9), len(u)))
     insert_at += 1
 
 body, toc_bytes = bytearray(), bytearray()

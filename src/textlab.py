@@ -637,18 +637,46 @@ def _word_regex(word):
     return re.compile(r'\s*'.join(re.escape(c) for c in chars)) if chars else None
 
 
-def _verdict(n_ab, lift):
+def relation_score(n_ab, lift, same_sentence, similar):
+    """세 근거를 하나로(앙상블): 우연보다 자주 함께 나오는가(45%) · 같은 문장에 붙어 나오는가(25%)
+    · 쓰이는 맥락이 닮았는가(30%). 맥락 값이 없으면 앞의 둘만으로. → 0~1"""
+    if n_ab == 0:
+        return 0.0
+    a = min(1.0, max(0.0, math.log2(lift) / 2)) if lift > 0 else 0.0   # 1배 → 0, 4배 이상 → 1
+    b = min(1.0, same_sentence / max(1, n_ab))
+    parts = [(a, 0.45), (b, 0.25)] + ([(similar, 0.30)] if similar is not None else [])
+    return sum(v * w for v, w in parts) / sum(w for _, w in parts)
+
+
+def _verdict(n_ab, score):
     if n_ab == 0:
         return '함께 나온 문헌이 없습니다'
     if n_ab < 3:
         return '함께 나온 문헌이 아주 적어 판단하기 어렵습니다'
-    if lift >= 3:
+    if score >= 0.6:
         return '매우 밀접합니다'
-    if lift >= 1.5:
+    if score >= 0.35:
         return '밀접한 편입니다'
-    if lift >= 0.8:
-        return '우연히 겹치는 정도입니다'
-    return '오히려 따로 나오는 편입니다'
+    if score >= 0.15:
+        return '약간 관련이 있어 보입니다'
+    return '관련이 약합니다(우연히 겹치는 정도)'
+
+
+def fuse_related(assoc, near, n=15, k=8):
+    """'자주 함께 나온 말'과 '비슷한 맥락에서 쓰이는 말' 순위를 합칩니다(순위 융합).
+    → [(낱말, 점수 0~100, 근거)]"""
+    score, how = defaultdict(float), defaultdict(set)
+    for rank, (w, _) in enumerate(assoc):
+        score[w] += 1.0 / (k + rank + 1)
+        how[w].add('함께')
+    for rank, (w, v) in enumerate(near):
+        if v > 0:
+            score[w] += 1.0 / (k + rank + 1)
+            how[w].add('비슷')
+    top = max(score.values(), default=0) or 1.0
+    out = sorted(score, key=lambda w: -score[w])[:n]
+    label = lambda h: '둘 다' if len(h) == 2 else ('함께 나옴' if '함께' in h else '비슷하게 쓰임')
+    return [(w, round(score[w] / top * 100), label(how[w])) for w in out]
 
 
 def relate(rows, words, wordspace=None, examples=60, idf=None):
@@ -727,7 +755,9 @@ def relate(rows, words, wordspace=None, examples=60, idf=None):
                 va, vb = wordspace.vecs[wordspace.index[wa]], wordspace.vecs[wordspace.index[wb]]
                 sim = max(0.0, sum(x * y for x, y in zip(va, vb)))
         d = sorted(dist[(a, b)])
+        score = relation_score(n_ab, lift, sent_both[(a, b)], sim)
         result['pairs'].append({'a': a, 'b': b, 'both': n_ab, 'lift': lift, 'sentences': sent_both[(a, b)],
                                 'median_gap': d[len(d) // 2] if d else None, 'similar': sim,
-                                'verdict': _verdict(n_ab, lift)})
+                                'score': score, 'verdict': _verdict(n_ab, score)})
+    result['pairs'].sort(key=lambda p: -p['score'])   # 가장 밀접한 짝부터
     return result

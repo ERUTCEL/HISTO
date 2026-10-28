@@ -24,6 +24,8 @@ import bookmarks as bm
 import reader
 import history_fields as hf
 import settings
+import hanja_input
+import threading
 from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
@@ -84,7 +86,8 @@ def _terms_regex(terms):
     return re.compile('|'.join(pats)) if pats else None
 
 
-SORTS = ('학습 추천순', '기본 점수순', '판정 필요순')
+SORTS = ('추천순', '판정 필요순')
+OLD_SORTS = {'학습 추천순': '추천순', '기본 점수순': '추천순'}   # 예전 설정 이름
 
 
 def read_results(folder, profile=None):
@@ -281,14 +284,16 @@ class ResultsWindow(tk.Toplevel):
         last = settings.load().get('results', {})   # 마지막으로 고른 결과 창 설정
         self.threshold = tk.StringVar(value=last.get('threshold') if last.get('threshold') in ('전체 후보', '60점 이상', '80점 이상') else '전체 후보')
         self.source_filter = tk.StringVar(value='모든 자료원')
-        self.sort_mode = tk.StringVar(value=last.get('sort') if last.get('sort') in SORTS else SORTS[0])
+        last_sort = OLD_SORTS.get(last.get('sort'), last.get('sort'))
+        self.sort_mode = tk.StringVar(value=last_sort if last_sort in SORTS else SORTS[0])
         self.only_hits = tk.BooleanVar(value=bool(last.get('only_hits', False)))
         self.hl_terms, self.hl_re = [], None
         self.info = tk.StringVar()
         self.learn_info = tk.StringVar()
         self.judg = None
         self.model = ranker.Ranker()
-        self.pred = {}
+        self.pred = {}       # 추천(0~1): 기본 점수와 학습 결과를 판정 수에 따라 섞은 값
+        self.pred_raw = {}   # 학습 모델만의 값(판정 필요순에 씀)
         self.index = None          # TF-IDF (2강)
         self.wordspace = None      # PMI·SVD (3강)
         self.topics = None         # 주제 주석 (5·6강)
@@ -477,6 +482,8 @@ class ResultsWindow(tk.Toplevel):
         try:
             self.rows, self.profile = read_results(self.folder)
             self._fetching.clear()
+            rows_for_hanja = list(self.rows)   # 사료에 쓰인 '한글(漢字)' 표기를 한자 변환 후보로
+            threading.Thread(target=lambda: hanja_input.learn_pairs(rows_for_hanja), daemon=True).start()
             self._struct = {}
         except Exception as exc:
             self.rows, self.filtered, self.shown = [], [], {}
@@ -873,17 +880,19 @@ class ResultsWindow(tk.Toplevel):
             self.model = ranker.Ranker().fit(data)
         else:
             self.model.fit(data, epochs=8, warm=True)
-        self.pred = {r.get('key'): self.model.prob(ranker.features(r)) for r in self.rows} if self.model.trained else {}
+        self.pred_raw = {r.get('key'): self.model.prob(ranker.features(r)) for r in self.rows} if self.model.trained else {}
         pos, neg = self.judg.counts()
+        self.pred = ranker.blend(self.rows, self.pred_raw, pos + neg)
         if self.model.trained:
-            self.learn_info.set(f'판정 {pos + neg}건 (관련 {pos} · 무관 {neg}) · 학습 추천 사용 중')
+            w = ranker.blend_weight(pos + neg)
+            self.learn_info.set(f'판정 {pos + neg}건 (관련 {pos} · 무관 {neg}) · 추천 = 판정 학습 {w * 100:.0f}% + 기본 점수 {100 - w * 100:.0f}%')
         else:
             need = []
             if pos < ranker.MIN_PER_CLASS:
                 need.append(f'관련 {ranker.MIN_PER_CLASS - pos}건')
             if neg < ranker.MIN_PER_CLASS:
                 need.append(f'무관 {ranker.MIN_PER_CLASS - neg}건')
-            self.learn_info.set(f'판정 {pos + neg}건 · 학습까지 ' + ', '.join(need) + ' 더')
+            self.learn_info.set(f'판정 {pos + neg}건 · 지금 추천은 기본 점수만 씀 · 판정 학습까지 ' + ', '.join(need) + ' 더')
 
     def _rec_text(self, row):
         p = self.pred.get(row.get('key'))
@@ -896,7 +905,7 @@ class ResultsWindow(tk.Toplevel):
     def _sort(self, rows):
         mode = self.sort_mode.get()
         rule = {id(r): i for i, r in enumerate(self.rows)}  # 원래 규칙 점수 순서
-        if mode == '학습 추천순' and self.pred:
+        if mode == '추천순' and self.pred:
             rows.sort(key=lambda r: (-self.pred.get(r.get('key'), 0.0), rule[id(r)]))
         elif mode == '판정 필요순':
             rows.sort(key=self._need_key(rows, rule))
@@ -914,8 +923,8 @@ class ResultsWindow(tk.Toplevel):
 
         def key(r):
             labeled = self.judg is not None and self.judg.get(r.get('key')) is not None
-            if self.pred:
-                return (labeled, round(abs(self.pred.get(r.get('key'), 0.5) - 0.5), 2), turn[id(r)], rule[id(r)])
+            if self.pred_raw:
+                return (labeled, round(abs(self.pred_raw.get(r.get('key'), 0.5) - 0.5), 2), turn[id(r)], rule[id(r)])
             return (labeled, turn[id(r)], round(abs(r['analysis']['score'] - 60) / 100.0, 1), rule[id(r)])
         return key
 
@@ -1266,7 +1275,7 @@ class PerformanceWindow(tk.Toplevel):
         trow.pack(anchor='w')
         ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.destroy, cursor='hand2').pack(side='left', padx=(0, px(10)))
         tk.Label(trow, text='추천 성능', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
-        tk.Label(inner, text='내가 관련/무관을 표시한 문헌을 기준으로, 기본 점수 순서와 학습 추천 순서 중 어느 쪽이 더 잘 맞히는지 비교합니다.',
+        tk.Label(inner, text='내가 관련/무관을 표시한 문헌을 기준으로 기본 점수만, 판정 학습만, 둘을 섞은 추천(목록 정렬에 쓰는 방식) 중 어느 쪽이 더 잘 맞히는지 비교합니다.',
                  bg=CARD, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(4), 0))
         ui.hline(head, LINE).pack(fill='x')
         body = ui.ScrollFrame(self)
@@ -1295,19 +1304,20 @@ class PerformanceWindow(tk.Toplevel):
         table = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         table.pack(fill='x', pady=(px(16), 0))
         table.columnconfigure(0, weight=1)
-        for c, text in enumerate(('기준', '기본 점수 순서', '학습 추천 순서')):
+        for c, text in enumerate(('기준', '기본 점수만', '판정 학습만', '추천 (둘을 섞음 · 지금 쓰는 방식)')):
             tk.Label(table, text=text, bg=HEAD, fg=MUTED, font=ui.FONTS['label_sm'], anchor='w' if c == 0 else 'center',
                      padx=px(14), pady=px(8)).grid(row=0, column=c, sticky='nsew')
 
         def fmt(v):
             return '–' if v is None else f'{v * 100:.0f}%'
 
-        for r, (name, rule, learned) in enumerate(ev['rows'], start=1):
-            better = learned is not None and rule is not None and learned > rule + 1e-9
+        for r, (name, *vals) in enumerate(ev['rows'], start=1):
+            best = max((v for v in vals if v is not None), default=None)
             tk.Label(table, text=name, bg=CARD, fg=INK, font=ui.FONTS['body'], anchor='w', padx=px(14), pady=px(8)).grid(row=r, column=0, sticky='nsew')
-            tk.Label(table, text=fmt(rule), bg=CARD, fg=INK, font=ui.FONTS['body'], width=10).grid(row=r, column=1, sticky='nsew')
-            tk.Label(table, text=fmt(learned), bg=CARD, fg=ACCENT if better else INK,
-                     font=ui.FONTS['label'] if better else ui.FONTS['body'], width=10).grid(row=r, column=2, sticky='nsew')
+            for c, v in enumerate(vals, start=1):
+                top = v is not None and best is not None and v >= best - 1e-9 and len([x for x in vals if x is not None]) > 1
+                tk.Label(table, text=fmt(v), bg=CARD, fg=ACCENT if top else INK,
+                         font=ui.FONTS['label'] if top else ui.FONTS['body'], width=10).grid(row=r, column=c, sticky='nsew')
         tk.Label(page, text=f'참고: 표시한 문헌 중 관련 비율은 {fmt(ev["base"])}입니다. 아무렇게나 늘어놓아도 \'상위 몇 건 중 관련 비율\'은 이 값, 마지막 줄은 50%가 나옵니다.\n'
                             '목록 위·아래를 고르게 표시할수록 믿을 만합니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(8), 0))

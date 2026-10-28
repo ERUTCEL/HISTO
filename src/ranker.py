@@ -192,6 +192,28 @@ def training_data(rows, judgments):
             if k in by_key and v.get('label') in (0, 1)]
 
 
+# ── 앙상블: 기본 점수 + 판정 학습 ─────────────────────────
+
+BLEND_PRIOR = 20   # 판정이 이만큼 쌓이면 학습 결과와 기본 점수를 반반 믿습니다
+
+
+def blend_weight(n_judged):
+    """판정 수에 따라 학습 결과를 믿는 비율(적을 때는 기본 점수 쪽으로 당겨 과적합을 막음)."""
+    return n_judged / (n_judged + BLEND_PRIOR) if n_judged > 0 else 0.0
+
+
+def rule_prob(row):
+    """기본 점수(대략 -100~200)를 0~1로: 50점이 0.5, 80점이 약 0.88."""
+    score = (row.get('analysis') or {}).get('score') or 0
+    return _sigmoid((score - 50) / 15.0)
+
+
+def blend(rows, learned, n_judged):
+    """→ {문헌 키: 추천 0~1}. 학습 전이면 기본 점수만, 학습 후에는 판정 수만큼 학습 결과를 섞습니다."""
+    w = blend_weight(n_judged) if learned else 0.0
+    return {r.get('key'): w * learned.get(r.get('key'), 0.5) + (1 - w) * rule_prob(r) for r in rows}
+
+
 # ── 평가 ───────────────────────────────────────────────────
 
 def precision_at(ranked_labels, k):
@@ -239,9 +261,14 @@ def cross_validated(data, folds=5, seed=11):
 
 
 def evaluate(data):
+    """판정한 문헌으로 세 방식(기본 점수만 · 판정 학습만 · 둘을 섞은 추천)을 비교합니다."""
     labels = [y for _, y in data]
     rule = [f.get('rule', 0.0) for f, _ in data]
     learned = cross_validated(data)
+    blended = None
+    if learned:
+        w = blend_weight(len(data))
+        blended = [w * p + (1 - w) * _sigmoid((r * 100 - 50) / 15.0) for p, r in zip(learned, rule)]
 
     def ranked(scores):
         order = sorted(range(len(labels)), key=lambda i: -scores[i])
@@ -250,9 +277,11 @@ def evaluate(data):
     out = {'n': len(labels), 'pos': sum(labels), 'rows': []}
     rr = ranked(rule)
     lr = ranked(learned) if learned else None
+    br = ranked(blended) if blended else None
     for k in (5, 10, 20):
-        out['rows'].append((f'상위 {k}건 중 관련 문헌 비율',
-                            precision_at(rr, k), precision_at(lr, k) if lr else None))
-    out['rows'].append(('관련 문헌이 무관 문헌보다 위에 있을 확률', auc(rule, labels), auc(learned, labels) if learned else None))
+        out['rows'].append((f'상위 {k}건 중 관련 문헌 비율', precision_at(rr, k),
+                            precision_at(lr, k) if lr else None, precision_at(br, k) if br else None))
+    out['rows'].append(('관련 문헌이 무관 문헌보다 위에 있을 확률', auc(rule, labels),
+                        auc(learned, labels) if learned else None, auc(blended, labels) if blended else None))
     out['base'] = sum(labels) / len(labels) if labels else None
     return out

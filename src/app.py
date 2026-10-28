@@ -21,6 +21,7 @@ import ui_theme as ui
 import bookmarks as bm
 import history_fields as hf
 import settings
+import hanja_input
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_STRONG,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
                       NAV_MUTED, NAV_LINE)
@@ -111,6 +112,7 @@ class App(tk.Tk):
         super().__init__()
         self.title('HISTRO — 사료 통합 검색과 분석')
         apply_theme(self)
+        hanja_input.install(self)   # 입력칸에서 F9 → 한자로 바꾸기
         ui.fit_geometry(self, 1280, 860, 1080, 720)
         self._set_icon()
         self.worker = None
@@ -171,6 +173,7 @@ class App(tk.Tk):
         self.bind('<Alt-Left>', lambda e: self.go_back())
         self.after(150, self.poll)
         self.after(250, self.refresh_counts)
+        self.after(900, lambda: self._offer_old_cleanup())
 
     def _set_icon(self):
         try:
@@ -282,12 +285,13 @@ class App(tk.Tk):
         head = tk.Frame(left, bg=CARD)
         head.pack(fill='x')
         tk.Label(head, text='검색어와 별칭', bg=CARD, fg=INK, font=ui.FONTS['label']).pack(side='left')
-        tk.Label(head, text='  ·  한 줄에 하나', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
+        tk.Label(head, text='  ·  한 줄에 하나 · 한자는 한글로 친 뒤 F9', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
         self.terms = tk.Text(left, height=4, font=ui.FONTS['input'], wrap='word', relief='flat', bg=FIELD, fg=INK,
                              insertbackground=INK, padx=px(12), pady=px(9), spacing1=px(2), spacing3=px(2),
                              highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
                              selectbackground=ACCENT, selectforeground='white')
         self.terms.pack(fill='x', pady=(px(8), 0))
+        self.terms.bind('<Button-3>', hanja_input._context_menu)
         ui.placeholder(self.terms, '연구 대상을 적용하면 이름과 별칭이 채워집니다. 직접 적어도 됩니다.\n예: 숙빈 최씨\n淑嬪崔氏')
 
         right = tk.Frame(cols, bg=CARD)
@@ -845,6 +849,33 @@ class App(tk.Tk):
         self._clear_work()
         return work
 
+    def _offer_old_cleanup(self):
+        """예전 버전이 쌓아 둔 '수집결과' 폴더를 한 번만 물어보고 지웁니다."""
+        old = (APP_HOME / '수집결과').resolve()
+        if settings.get('old_results_handled') or not old.is_dir() or old.name != '수집결과':
+            return
+        searches = sum(1 for p in [old, *old.iterdir()] if p.is_dir() and self._has_results(p))
+        size = sum(f.stat().st_size for f in old.rglob('*') if f.is_file()) / 1e6
+        ok = messagebox.askyesno(
+            '예전 수집결과 정리',
+            f"예전 방식으로 쌓인 '수집결과' 폴더가 있습니다(검색 {searches}개, {size:.0f}MB).\n지울까요?\n\n"
+            "저장한 검색·즐겨찾기·설정은 지워지지 않습니다(즐겨찾기한 글은 그대로 남습니다).\n"
+            "남길 검색이 있으면 '아니요'를 누르고, 결과 창의 '저장한 검색 열기'로 연 뒤 '이 검색 저장'을 하세요. "
+            "그다음 탐색기에서 '수집결과' 폴더를 지우면 됩니다.", parent=self)
+        settings.save(old_results_handled=True)
+        if not ok:
+            return
+        window = getattr(self, 'result_window', None)
+        if window is not None and window.winfo_exists() and str(window.folder).startswith(str(old)):
+            window.destroy()
+        shutil.rmtree(old, ignore_errors=True)
+        if str(Path(self.output.get()).resolve()).startswith(str(old)):
+            self.output.set(str(WORK_DIR))
+            settings.save(output=str(WORK_DIR))
+        self.refresh_counts()
+        self.state.set("예전 '수집결과' 폴더를 지웠습니다." if not old.exists()
+                       else "'수집결과' 폴더 일부를 지우지 못했습니다(다른 프로그램이 쓰는 중). 탐색기에서 지워 주세요.")
+
     def _count_records(self, folder):
         try:
             with sqlite3.connect((folder / 'collection.sqlite3').resolve().as_uri() + '?mode=ro', uri=True, timeout=1) as conn:
@@ -1210,6 +1241,7 @@ if __name__ == '__main__':
     app = App()
     if len(sys.argv) == 3 and sys.argv[1] == '--smoke-test':
         test_output = Path(sys.argv[2]).resolve()
+        app._offer_old_cleanup = lambda: None   # 자동 점검 중에는 묻지 않음
         app.withdraw()
         app.output.set(str(test_output))
         app.mode.set('본문 이어받기')
