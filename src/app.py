@@ -19,6 +19,7 @@ from browser_links import open_web_url
 import ui_theme as ui
 import bookmarks as bm
 import history_fields as hf
+import settings
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_STRONG,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
                       NAV_MUTED, NAV_LINE)
@@ -161,7 +162,7 @@ class App(tk.Tk):
         self._build_library(self.pages['library'])
         self._build_activity(self.pages['activity'])
         self._build_favorites(self.pages['favorites'])
-        self.sources_changed()
+        self._load_settings()
         self.show_page('search')
         self.protocol('WM_DELETE_WINDOW', self.close)
         self.bind('<Alt-Left>', lambda e: self.go_back())
@@ -295,7 +296,7 @@ class App(tk.Tk):
         for i, (value, label) in enumerate(MODES):
             seg.columnconfigure(i % 3, weight=1, uniform='seg')
             b = ttk.Radiobutton(seg, text=label, value=value, variable=self.mode, style='Seg.Toolbutton',
-                                command=self.mode_changed, cursor='hand2')
+                                command=self._mode_picked, cursor='hand2')
             b.grid(row=i // 3, column=i % 3, sticky='nsew', padx=(0, px(6)), pady=(0, px(6)))
             self.mode_buttons.append(b)
         self.mode_select = self.mode_buttons[0]
@@ -308,6 +309,7 @@ class App(tk.Tk):
         self.depth = tk.StringVar(value=DEPTHS[1][0])
         self.depth_box = ttk.Combobox(depth, textvariable=self.depth, values=[d for d, _ in DEPTHS], state='disabled', width=22)
         self.depth_box.pack(side='left')
+        self.depth_box.bind('<<ComboboxSelected>>', lambda e: settings.save(depth=self.depth.get()))
         tk.Label(depth, text=' 목록만 · 전체 수집에 적용', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
         right.bind('<Configure>', lambda e: self.mode_hint_label.configure(wraplength=max(px(200), e.width)))
 
@@ -758,6 +760,8 @@ class App(tk.Tk):
         self.stats['selected'].set(str(count))
         extra = f' + 공식 사이트 {official}곳' if official else ''
         self.source_summary.set(f'자료원 {count}곳{extra} 선택됨 · 변경' if count or official else '자료원을 선택하세요 →')
+        if not getattr(self, '_loading', True):
+            settings.save(sources=[s.id for s in SOURCES if self.source_vars[s.id].get()])
 
     def open_source(self, key):
         term = self.terms.get('1.0', 'end').strip().splitlines()
@@ -835,24 +839,45 @@ class App(tk.Tk):
             n += 1
         return folder
 
+    def _load_settings(self):
+        """마지막으로 고른 검색 방식·범위·자료원·저장 위치를 불러옵니다."""
+        self._loading = True
+        try:
+            mode = settings.get('mode')
+            if mode in [m for m, _ in MODES]:
+                self.mode.set(mode)
+            depth = settings.get('depth')
+            if depth in dict(DEPTHS):
+                self.depth.set(depth)
+            chosen = settings.get('sources')
+            if isinstance(chosen, list):
+                for s in SOURCES:
+                    self.source_vars[s.id].set(s.id in chosen)
+            output = settings.get('output')
+            if output and Path(output).is_dir():
+                self.output.set(output)
+        finally:
+            self._loading = False
+        self.sources_changed()
+        self.mode_changed()
+
+    def _mode_picked(self):
+        self.mode_changed()
+        settings.save(mode=self.mode.get())
+
     def reset_search(self):
-        """연구 대상 · 검색어 · 검색 방식 · 범위 · 자료원 선택을 처음 상태로. 모은 자료는 지우지 않습니다."""
+        """연구 대상·검색어를 비우고 다음 검색을 새 폴더에서 시작합니다.
+        검색 방식·범위·자료원 선택은 마지막으로 고른 그대로 둡니다. 모은 자료는 지우지 않습니다."""
         if self.running:
             return
         self.target.set('')
         self.terms.delete('1.0', 'end')
         self.terms.edit_modified(True)
-        self.mode.set(MODES[0][0])
-        self.depth.set(DEPTHS[1][0])
-        for s in SOURCES:
-            self.source_vars[s.id].set(s.mode != 'official')
-        self.sources_changed()
-        self.mode_changed()
         self._fresh_next = True
         self.stats['records'].set('0')
         self.stats['bodies'].set('0')
         self._fill_recent([])
-        self.state.set('검색 조건을 처음 상태로 되돌렸습니다. 다음 검색은 새 폴더에 따로 저장됩니다(이전 결과는 그대로 보관).')
+        self.state.set('연구 대상과 검색어를 비웠습니다. 다음 검색은 새 폴더에 따로 저장됩니다(이전 결과는 그대로 보관, 검색 방식·자료원 선택은 유지).')
         self.target_entry.focus_set()
 
     def apply_target(self):
@@ -887,6 +912,7 @@ class App(tk.Tk):
         folder = filedialog.askdirectory(parent=self, initialdir=self.output.get())
         if folder:
             self.output.set(folder)
+            settings.save(output=str(Path(folder).resolve()))
             self.stats['records'].set('0')
             self.stats['bodies'].set('0')
             self.refresh_counts()
@@ -985,6 +1011,7 @@ class App(tk.Tk):
 
     def _launch(self, out, cmd, message):
         self.active_out = out
+        settings.save(output=str(out))   # 다음 실행 때 이 결과 폴더로 시작
         self.running = True
         self._set_inputs(False)
         self._set_busy(True)
@@ -1075,6 +1102,7 @@ class App(tk.Tk):
             folder = Path(chosen)
             if not self.running:
                 self.output.set(str(folder))
+                settings.save(output=str(folder.resolve()))
         window = getattr(self, 'result_window', None)
         if window is not None and window.winfo_exists():
             if Path(window.folder) == folder.resolve():

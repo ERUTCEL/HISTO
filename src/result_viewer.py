@@ -21,6 +21,7 @@ import mtl
 import bookmarks as bm
 import reader
 import history_fields as hf
+import settings
 from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
@@ -259,10 +260,11 @@ class ResultsWindow(tk.Toplevel):
         self.query = tk.StringVar()
         self.facet = tk.StringVar(value='모든 관점')
         self.period = tk.StringVar(value='모든 연대')
-        self.threshold = tk.StringVar(value='전체 후보')
+        last = settings.load().get('results', {})   # 마지막으로 고른 결과 창 설정
+        self.threshold = tk.StringVar(value=last.get('threshold') if last.get('threshold') in ('전체 후보', '60점 이상', '80점 이상') else '전체 후보')
         self.source_filter = tk.StringVar(value='모든 자료원')
-        self.sort_mode = tk.StringVar(value=SORTS[0])
-        self.only_hits = tk.BooleanVar(value=False)
+        self.sort_mode = tk.StringVar(value=last.get('sort') if last.get('sort') in SORTS else SORTS[0])
+        self.only_hits = tk.BooleanVar(value=bool(last.get('only_hits', False)))
         self.hl_terms, self.hl_re = [], None
         self.info = tk.StringVar()
         self.learn_info = tk.StringVar()
@@ -277,7 +279,9 @@ class ResultsWindow(tk.Toplevel):
         self.lab = None
         self.annot_task = tk.StringVar(value='주제')
         self.bm = getattr(parent, 'bookmarks', None) or bm.BookmarkStore()
-        self.save_cat = tk.StringVar(value=bm.UNSORTED)
+        self.save_cat = tk.StringVar(value=last.get('save_cat') if last.get('save_cat') in self.bm.names() else bm.UNSORTED)
+        for var in (self.threshold, self.sort_mode, self.only_hits, self.save_cat):
+            var.trace_add('write', lambda *a: self._remember())
         self.bm_msg = tk.StringVar()
 
         top = tk.Frame(self, bg=CARD)
@@ -407,8 +411,8 @@ class ResultsWindow(tk.Toplevel):
         self.detail.tag_bind('open_link', '<Leave>', lambda e: self.detail.configure(cursor='arrow'))
         self.detail.tag_configure('open_link', font=ui.FONTS['label'], foreground=ACCENT, underline=True)
         # 정리된 본문: 문단 간격, 원문(한문)·주석 접기, 주석 표시([註 001]) 누르면 해당 풀이로
-        self._show_hanja = False
-        self._show_notes = False
+        self._show_hanja = bool(last.get('show_hanja', False))
+        self._show_notes = bool(last.get('show_notes', False))
         self._struct = {}
         self.detail.tag_configure('para', spacing1=px(2), spacing3=px(14))
         self.detail.tag_configure('hanja_t', spacing2=px(7))
@@ -1034,11 +1038,20 @@ class ResultsWindow(tk.Toplevel):
                     parts += self._para_parts(n, ('noteitem',))
         return parts
 
+    def _remember(self):
+        try:
+            settings.save(results={'threshold': self.threshold.get(), 'sort': self.sort_mode.get(),
+                                   'only_hits': bool(self.only_hits.get()), 'save_cat': self.save_cat.get(),
+                                   'show_hanja': self._show_hanja, 'show_notes': self._show_notes})
+        except (tk.TclError, AttributeError):
+            pass
+
     def _toggle(self, what):
         if what == 'hanja':
             self._show_hanja = not self._show_hanja
         else:
             self._show_notes = not self._show_notes
+        self._remember()
         top = self.detail.yview()[0]
         self.show_selected()
         self.detail.yview_moveto(top)
