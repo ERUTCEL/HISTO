@@ -18,6 +18,7 @@ from source_connectors import SOURCES, BY_ID, AUTO_IDS
 from browser_links import open_web_url
 import ui_theme as ui
 import bookmarks as bm
+import history_fields as hf
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_STRONG,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
                       NAV_MUTED, NAV_LINE)
@@ -205,7 +206,7 @@ class App(tk.Tk):
         ui.hline(bottom, NAV_LINE).pack(fill='x', pady=(0, px(14)))
         tk.Label(bottom, text=f'{len(SOURCES)}개 공개 자료원 · {len(AUTO_IDS)}곳 통합', bg=NAV, fg=NAV_TEXT,
                  font=ui.FONTS['small']).pack(anchor='w')
-        tk.Label(bottom, text='정치사 · 사회사 · 제도사\n연대와 관계 후보 탐색', bg=NAV, fg=NAV_MUTED, justify='left',
+        tk.Label(bottom, text='정치·경제·사회·문화·사상·생활사\n연대와 관계 후보 탐색', bg=NAV, fg=NAV_MUTED, justify='left',
                  font=ui.FONTS['small']).pack(anchor='w', pady=(px(6), 0))
 
     def _build_statusbar(self):
@@ -908,13 +909,13 @@ class App(tk.Tk):
                 self.refresh_counts()
                 self._log_note = f'새 검색이라 결과를 새 폴더에 따로 저장합니다: {new_out.name}\n'
             out = new_out
-        profile = profile_override or profile_for_target(self.target.get())
+        profile = hf.apply(profile_override or profile_for_target(self.target.get()))
         saved_profile = out / 'active_profile.json'
         if not profile_override and saved_profile.exists():
             try:
                 saved = json.loads(saved_profile.read_text(encoding='utf-8'))
                 if saved.get('target') == profile['target']:
-                    profile = saved
+                    profile = hf.apply(saved)
             except (ValueError, OSError):
                 pass
         if not profile['target'].strip():

@@ -391,6 +391,12 @@ class TopicLabels:
         except (OSError, ValueError, AttributeError):
             pass
         t = self.data['targets'].setdefault(self.target, {'labels': list(default_labels), 'docs': {}})
+        for old, new in (('제도사', '정치사'),):   # 예전 분류 이름 정리(제도는 정치사에 포함)
+            if old in t['labels'] and old not in default_labels:
+                t['labels'] = [x for x in t['labels'] if x != old]
+                for doc in t['docs'].values():
+                    if old in doc.get('topics', []):
+                        doc['topics'] = sorted((set(doc['topics']) - {old}) | {new})
         for name in default_labels:
             if name not in t['labels']:
                 t['labels'].append(name)

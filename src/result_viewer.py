@@ -20,6 +20,7 @@ import textlab as tl
 import mtl
 import bookmarks as bm
 import reader
+import history_fields as hf
 from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
@@ -87,6 +88,7 @@ def read_results(folder, profile=None):
     folder = Path(folder).resolve()
     settings = folder / 'active_profile.json'
     profile = profile or (json.loads(settings.read_text(encoding='utf-8')) if settings.exists() else default_profile())
+    hf.apply(profile)  # 예전 폴더도 새 여섯 분류로
     db = folder / 'collection.sqlite3'
     if db.exists():
         with sqlite3.connect(db.as_uri() + '?mode=ro', uri=True, timeout=3) as conn:
@@ -306,7 +308,7 @@ class ResultsWindow(tk.Toplevel):
                                        values=['모든 자료원'] + [s.short for s in BY_ID.values()])
         self.source_box.pack(side='left', padx=(0, px(6)))
         self.facet_box = ttk.Combobox(controls, textvariable=self.facet, state='readonly', width=10,
-                                      values=['모든 관점', '정치사', '사회사', '제도사', '미분류'])
+                                      values=['모든 관점'] + hf.NAMES + ['미분류'])
         self.facet_box.pack(side='left', padx=(0, px(6)))
         self.period_box = ttk.Combobox(controls, textvariable=self.period, state='readonly', width=10)
         self.period_box.pack(side='left', padx=(0, px(6)))
@@ -343,7 +345,7 @@ class ResultsWindow(tk.Toplevel):
                                  show='headings', selectmode='extended', height=12)
         centered = ('fav', 'hit', 'rec', 'score', 'label', 'year')
         for name, label, width in (('fav', '★', 30), ('hit', '검색어', 52), ('rec', '추천', 48), ('score', '점수', 48), ('label', '판정', 42), ('title', '제목', 220),
-                                   ('source', '자료집', 100), ('facets', '관점', 80), ('year', '연대', 56), ('status', '상태', 84)):
+                                   ('source', '자료집', 100), ('facets', '관점', 120), ('year', '연대', 56), ('status', '상태', 84)):
             self.tree.heading(name, text=label, anchor='center' if name in centered else 'w')
             self.tree.column(name, width=px(width), minwidth=px(40), stretch=name == 'title',
                              anchor='center' if name in centered else 'w')
@@ -521,7 +523,7 @@ class ResultsWindow(tk.Toplevel):
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시'
-                      '  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in ('정치사', '사회사', '제도사')))
+                      '  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
         if self.shown:
             again = [i for i, row in self.shown.items() if keep and row.get('key') in keep]
             self.tree.selection_set(again or ['0'])
@@ -611,18 +613,18 @@ class ResultsWindow(tk.Toplevel):
         checks = tk.Frame(bar, bg=HEAD)
         checks.pack(fill='x', padx=(px(10), px(10)), pady=(px(2), px(6)))
         self.topic_vars = {}
-        for name in self.topics.task_labels(task):
+        for i, name in enumerate(self.topics.task_labels(task)):
             var = tk.BooleanVar(value=(name in ann) if ann is not None else False)
             self.topic_vars[name] = var
             hint = []
             if name in rule:
-                hint.append('규칙')
+                hint.append('제안')
             if name in probs:
                 hint.append(f'{probs[name]:.2f}')
             cb = tk.Checkbutton(checks, text=name + (f" ({' · '.join(hint)})" if hint else ''), variable=var, bg=HEAD,
                                 activebackground=HEAD, fg=INK, selectcolor=CARD, font=ui.FONTS['small'], bd=0,
                                 highlightthickness=0, cursor='hand2', command=self.save_topics)
-            cb.pack(side='left', padx=(0, px(10)))
+            cb.grid(row=i // 3, column=i % 3, sticky='w', padx=(0, px(10)))   # 세 개씩 줄 바꿈
 
     def _suggest(self, task, row):
         """과제별 제안: 주제는 규칙 관점 + 분류 모델, 자료 유형은 서식 규칙, 직접 만든 과제는 없음."""

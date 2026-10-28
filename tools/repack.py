@@ -63,7 +63,7 @@ for _f in sorted(src_dir.glob('*.py')):
 if _missing:
     sys.exit('EXE에 없는 모듈을 씁니다(실행 시 멈춤):\n  ' + '\n  '.join(_missing))
 
-APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui', 'mtl', 'bookmarks', 'reader')  # 바꾸거나 새로 넣을 앱 모듈
+APP_MODULES = ('ui_theme', 'result_viewer', 'ranker', 'textlab', 'textlab_ui', 'mtl', 'bookmarks', 'reader', 'history_fields')  # 바꾸거나 새로 넣을 앱 모듈
 replace, add = {}, {}
 for mod in APP_MODULES:
     entry = (0, code_of(src_dir / f'{mod}.py', f'{mod}.py'))
