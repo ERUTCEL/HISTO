@@ -85,7 +85,7 @@ class TextLabWindow(tk.Toplevel):
         self.book = ttk.Notebook(self)
         self.book.pack(fill='both', expand=True, padx=px(20), pady=px(14))
         self.tabs = {}
-        for key, label in (('search', '비슷한 문헌 찾기'), ('words', '함께 쓰인 말'),
+        for key, label in (('search', '비슷한 문헌 찾기'), ('relate', '단어 관계'), ('words', '함께 쓰인 말'),
                            ('context', '쓰임새 보기'), ('topics', '자동 분류'),
                            ('mtl', '여러 분류 함께 학습'), ('domain', '시대·자료집 차이 점검')):
             frame = tk.Frame(self.book, bg=BG, padx=px(16), pady=px(14))
@@ -93,6 +93,7 @@ class TextLabWindow(tk.Toplevel):
             self.tabs[key] = frame
         self._build_search(self.tabs['search'])
         self._build_words(self.tabs['words'])
+        self._build_relate(self.tabs['relate'])
         self._build_context(self.tabs['context'])
         self._build_topics(self.tabs['topics'])
         self._build_mtl(self.tabs['mtl'])
@@ -238,6 +239,136 @@ class TextLabWindow(tk.Toplevel):
         period = self.period_var.get()
         self.assoc_title.set('자주 함께 나온 말 (' + ('전체 시대' if period == '전체' else period) + ')')
         _fill(self.assoc_tree, [(w, f'{v:.2f}') for w, v in space.associations(word, None if period == '전체' else period, 20)])
+
+    # ── 단어 관계 ──
+
+    def _build_relate(self, page):
+        _note(page, '낱말을 두세 개 넣으면, 모은 문헌에서 그 말들이 얼마나 함께 나오는지, 우연보다 자주 붙어 나오는지, '
+                    '같은 문장에 함께 쓰였는지, 둘 다와 자주 같이 나오는 말과 시대별 변화, 함께 나온 문장을 보여줍니다. '
+                    '아래 문장을 두 번 누르면 결과 창에서 그 문헌을 엽니다.').pack(fill='x')
+        row = tk.Frame(page, bg=BG)
+        row.pack(fill='x', pady=(px(10), px(10)))
+        self.rel_vars = []
+        for i, hint in enumerate(('예: 숙빈 최씨', '예: 육상궁', '셋째 낱말 (선택)')):
+            var = tk.StringVar()
+            entry = ttk.Entry(row, textvariable=var, font=ui.FONTS['input'], width=18)
+            entry.pack(side='left', padx=(0 if i == 0 else px(6), 0))
+            entry.bind('<Return>', lambda e: self.relate())
+            ui.placeholder(entry, hint, var)
+            self.rel_vars.append(var)
+        ttk.Button(row, text='관계 보기', style='Primary.TButton', command=self.relate, cursor='hand2').pack(side='left', padx=(px(10), 0))
+
+        panes = ttk.Panedwindow(page, orient='vertical')
+        panes.pack(fill='both', expand=True)
+        box = tk.Frame(panes, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        self.rel_text = tk.Text(box, wrap='word', font=ui.FONTS['body'], relief='flat', bg=CARD, fg=INK, height=14,
+                                padx=px(18), pady=px(14), spacing3=px(5), highlightthickness=0, cursor='arrow')
+        scroll = ttk.Scrollbar(box, orient='vertical', command=self.rel_text.yview, style='Card.Vertical.TScrollbar')
+        self.rel_text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side='right', fill='y')
+        self.rel_text.pack(side='left', fill='both', expand=True)
+        t = self.rel_text
+        t.tag_configure('h', font=ui.FONTS['label'], foreground=ACCENT, spacing1=px(10), spacing3=px(4))
+        t.tag_configure('big', font=ui.FONTS['label'], foreground=INK)
+        t.tag_configure('ok', font=ui.FONTS['label'], foreground=OK_INK)
+        t.tag_configure('muted', foreground=MUTED, font=ui.FONTS['small'])
+        t.tag_configure('chip', background=ACCENT_PALE, foreground=ACCENT, font=ui.FONTS['label_sm'])
+        t.insert('end', '낱말을 두 개 이상 넣고 \'관계 보기\'를 누르세요.', 'muted')
+        t.configure(state='disabled')
+        panes.add(box, weight=3)
+        lower = tk.Frame(panes, bg=BG)
+        tk.Label(lower, text='함께 나온 문장', bg=BG, fg=INK, font=ui.FONTS['label']).pack(anchor='w', pady=(px(8), px(4)))
+        f, self.rel_tree = _table(lower, [('title', '문헌', 260), ('year', '연대', 70), ('sent', '함께 나온 문장', 520)], height=6)
+        f.pack(fill='both', expand=True)
+        self.rel_tree.bind('<Double-1>', lambda e: self._open_rel())
+        panes.add(lower, weight=2)
+        self._rel_keys = []
+
+    def relate(self):
+        words = []
+        for v in self.rel_vars:
+            w = v.get().strip()
+            if w and w not in words:
+                words.append(w)
+        if len(words) < 2:
+            messagebox.showinfo('단어 관계', '낱말을 두 개 이상 넣으세요.', parent=self)
+            return
+        rows = list(self.results.rows)
+        space = self.results.wordspace
+        idf = self.results.ensure_index().idf
+        self.status.set('「' + '」·「'.join(words) + '」 관계를 찾는 중입니다…')
+
+        def work():
+            ws = space or tl.WordSpace(rows, vocab_size=1500, k=32)
+            return ws, tl.relate(rows, words, ws, idf=idf)
+
+        def done(value):
+            ws, res = value
+            if self.results.wordspace is None:
+                self.results.wordspace = ws
+                self.period_box.configure(values=['전체'] + sorted(ws.periods))
+            self._show_relation(res)
+        run_background(self, work, done)
+
+    def _show_relation(self, res):
+        t = self.rel_text
+        words = res['words']
+        q = lambda w: f'「{w}」'
+        t.configure(state='normal')
+        t.delete('1.0', 'end')
+        t.insert('end', '각 낱말이 나온 문헌\n', 'h')
+        for w in words:
+            t.insert('end', f"  {q(w)}  ", 'big')
+            t.insert('end', f"{res['count'][w]:,}건  ", None)
+            t.insert('end', f"(전체 {res['n_docs']:,}건 중 {res['count'][w] / max(1, res['n_docs']) * 100:.0f}%)\n", 'muted')
+        if len(words) == 3:
+            t.insert('end', f"  셋이 모두 나온 문헌  ", 'big')
+            t.insert('end', f"{res['all']:,}건\n")
+        for p in res['pairs']:
+            t.insert('end', f"{q(p['a'])} 와 {q(p['b'])}\n", 'h')
+            t.insert('end', '  ' + p['verdict'] + '\n', 'ok' if p['both'] >= 3 and p['lift'] >= 1.5 else 'big')
+            t.insert('end', f"  · 함께 나온 문헌 {p['both']:,}건")
+            if p['both'] and p['lift']:
+                t.insert('end', f" — 따로 나오는 빈도로 보면 예상보다 {p['lift']:.1f}배")
+            t.insert('end', '\n')
+            if p['sentences']:
+                t.insert('end', f"  · 같은 문장 안에서 함께 쓰인 곳 {p['sentences']:,}곳\n")
+            if p['median_gap'] is not None:
+                t.insert('end', f"  · 한 문헌 안에서 두 말 사이 거리: 보통 {p['median_gap']:,}자 안팎\n")
+            if p['similar'] is not None:
+                t.insert('end', f"  · 쓰이는 맥락이 비슷한 정도 {p['similar'] * 100:.0f}%", None)
+                t.insert('end', '  (주변에 오는 말이 얼마나 닮았는지 — 높으면 비슷한 이야기에서 쓰임)\n', 'muted')
+        if res['common']:
+            t.insert('end', '모두와 자주 같이 나오는 말\n', 'h')
+            t.insert('end', '  ')
+            for word, n in res['common']:
+                t.insert('end', f' {word} {n} ', 'chip')
+                t.insert('end', ' ')
+            t.insert('end', '\n')
+            t.insert('end', '  숫자는 각 낱말과 같은 문장에 함께 나온 횟수 중 가장 적은 값입니다.\n', 'muted')
+        if res['periods']:
+            label = '모두' if len(words) > 2 else '둘 다'
+            t.insert('end', f'시대별로 {label} 나온 문헌\n', 'h')
+            for period, both, anyone in res['periods']:
+                t.insert('end', f"  {period}  ", 'big')
+                t.insert('end', f"{both:,}건", None)
+                t.insert('end', f"  (어느 하나라도 나온 문헌 {anyone:,}건 중 {both / max(1, anyone) * 100:.0f}%)\n", 'muted')
+        t.insert('end', '\n함께 나왔다고 해서 바로 관계가 있다는 뜻은 아닙니다. 아래 문장으로 실제 맥락을 확인하세요.\n', 'muted')
+        t.configure(state='disabled')
+        rows = []
+        self._rel_keys = []
+        for key, sent in res['examples']:
+            row = self.results.row_by_key(key) or {}
+            year = (row.get('analysis') or {}).get('year') or '미상'
+            rows.append((row.get('title', key), year, ' '.join(sent.split())[:300]))
+            self._rel_keys.append(key)
+        _fill(self.rel_tree, rows)
+        self.status.set('「' + '」·「'.join(words) + f"」 — 함께 나온 문장 {len(rows)}개를 찾았습니다.")
+
+    def _open_rel(self):
+        sel = self.rel_tree.selection()
+        if sel and int(sel[0]) < len(self._rel_keys):
+            self.results.focus_key(self._rel_keys[int(sel[0])])
 
     # ── 4강: 문맥 용례 ──
 

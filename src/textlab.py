@@ -624,3 +624,110 @@ def _f1(tp, fp, fn):
     r = tp / (tp + fn) if tp + fn else None
     f = 2 * p * r / (p + r) if p and r else (0.0 if (p is not None or r is not None) and (tp + fp + fn) else None)
     return {'p': p, 'r': r, 'f1': f}
+
+
+# ── 단어 관계: 두세 낱말이 모은 문헌에서 얼마나 함께 나오는가 ─────────────
+
+_SENT_SPLIT = re.compile(r'(?<=[.?!。])\s+|\n+')
+
+
+def _word_regex(word):
+    """띄어쓰기와 무관하게 찾기('숙빈 최씨' = '숙빈최씨')."""
+    chars = [c for c in word if not c.isspace()]
+    return re.compile(r'\s*'.join(re.escape(c) for c in chars)) if chars else None
+
+
+def _verdict(n_ab, lift):
+    if n_ab == 0:
+        return '함께 나온 문헌이 없습니다'
+    if n_ab < 3:
+        return '함께 나온 문헌이 아주 적어 판단하기 어렵습니다'
+    if lift >= 3:
+        return '매우 밀접합니다'
+    if lift >= 1.5:
+        return '밀접한 편입니다'
+    if lift >= 0.8:
+        return '우연히 겹치는 정도입니다'
+    return '오히려 따로 나오는 편입니다'
+
+
+def relate(rows, words, wordspace=None, examples=60, idf=None):
+    """두세 낱말의 관계를 셉니다.
+
+    - 각 낱말이 나온 문헌 수, 둘(셋)이 함께 나온 문헌 수
+    - 우연보다 몇 배 자주 함께 나오는지(따로 나오는 빈도로 계산한 기대치 대비)
+    - 같은 문장 안에서 함께 나온 횟수와 둘 사이 평균 거리(글자)
+    - 쓰이는 맥락이 비슷한 정도(낱말 관계 계산이 되어 있으면)
+    - 둘 다와 자주 같이 나오는 말, 시대별 함께 나온 문헌 수, 함께 나온 문장 예시
+    """
+    words = [w.strip() for w in words if w and w.strip()]
+    rx = {w: _word_regex(w) for w in words}
+    n_docs = len(rows)
+    docs = {w: set() for w in words}
+    pairs = [(a, b) for i, a in enumerate(words) for b in words[i + 1:]]
+    sent_both = {p: 0 for p in pairs}
+    dist = {p: [] for p in pairs}
+    companions = {w: Counter() for w in words}
+    by_period = defaultdict(lambda: [0, 0])     # 시대 → [모두 나온 문헌, 하나라도 나온 문헌]
+    samples = []
+    for r in rows:
+        text = doc_text(r, body_chars=30000)
+        found = {}
+        for w in words:
+            pos = [m.start() for m in rx[w].finditer(text)] if rx[w] else []
+            if pos:
+                docs[w].add(r.get('key'))
+                found[w] = pos
+        if not found:
+            continue
+        period = r.get('analysis', {}).get('period') or '연대 미상'
+        by_period[period][1] += 1
+        if len(found) == len(words):
+            by_period[period][0] += 1
+        for a, b in pairs:
+            if a in found and b in found:
+                dist[(a, b)].append(min(abs(x - y) for x in found[a][:50] for y in found[b][:50]))
+        if len(found) < 2:
+            continue
+        for sent in _SENT_SPLIT.split(text):
+            here = [w for w in words if rx[w] and rx[w].search(sent)]
+            if len(here) < 2:
+                continue
+            for a, b in pairs:
+                if a in here and b in here:
+                    sent_both[(a, b)] += 1
+            toks = set(tokens(sent))
+            for w in here:
+                companions[w].update(toks)
+            if len(samples) < examples * 3:
+                samples.append((len(here), -len(sent), r.get('key'), sent.strip()))
+    own = set()
+    for w in words:
+        own.update(tokens(w))
+    common = []
+    if len(words) >= 2:
+        shared = set.intersection(*(set(c) for c in companions.values())) - own
+        if idf:   # 거의 모든 문헌에 나오는 흔한 말은 빼고, 드문 말일수록 위로
+            shared = {t for t in shared if t in idf}
+        weight = (lambda t: idf.get(t, 0.0)) if idf else (lambda t: 1.0)
+        common = sorted(shared, key=lambda t: -min(companions[w][t] for w in words) * weight(t))[:15]
+        common = [(t, min(companions[w][t] for w in words)) for t in common]
+    result = {'words': words, 'n_docs': n_docs, 'count': {w: len(docs[w]) for w in words}, 'pairs': [],
+              'all': len(set.intersection(*docs.values())) if words else 0, 'common': common,
+              'periods': sorted(((p, a, b) for p, (a, b) in by_period.items() if a), key=lambda x: str(x[0])),
+              'examples': [(k, s) for _, _, k, s in sorted(samples, reverse=True)[:examples]]}
+    for a, b in pairs:
+        n_ab = len(docs[a] & docs[b])
+        expect = len(docs[a]) * len(docs[b]) / n_docs if n_docs else 0
+        lift = n_ab / expect if expect else 0.0
+        sim = None
+        if wordspace is not None and wordspace.vecs:
+            wa, wb = wordspace.lookup(a), wordspace.lookup(b)
+            if wa and wb and wa != wb:
+                va, vb = wordspace.vecs[wordspace.index[wa]], wordspace.vecs[wordspace.index[wb]]
+                sim = max(0.0, sum(x * y for x, y in zip(va, vb)))
+        d = sorted(dist[(a, b)])
+        result['pairs'].append({'a': a, 'b': b, 'both': n_ab, 'lift': lift, 'sentences': sent_both[(a, b)],
+                                'median_gap': d[len(d) // 2] if d else None, 'similar': sim,
+                                'verdict': _verdict(n_ab, lift)})
+    return result
