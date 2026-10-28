@@ -523,7 +523,8 @@ class ResultsWindow(tk.Toplevel):
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시'
-                      '  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
+                      + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
+                         if any(counts[name] for name in hf.NAMES) else ''))
         if self.shown:
             again = [i for i, row in self.shown.items() if keep and row.get('key') in keep]
             self.tree.selection_set(again or ['0'])
@@ -1086,8 +1087,10 @@ class ResultsWindow(tk.Toplevel):
         if row.get('body'):
             parts += self._body_parts(row)
         else:
-            parts += [('검색 화면에 보인 일부\n', 'head'),
-                      ((row.get('snippet') or '(검색 화면에 보인 글이 없습니다)') + '\n', 'body')]
+            parts.append(('검색 화면에 보인 일부\n', 'head'))
+            paras = reader.snippet_paragraphs(row.get('snippet'))
+            for p in paras or ['(검색 화면에 보인 글이 없습니다)']:
+                parts += self._para_parts(p, ('body', 'para'))
             if not row.get('download_supported', True):
                 parts += [('\n이 자료는 사이트가 서지·요약만 공개합니다. 본문은 원문 사이트에서 보세요.  ', 'note'),
                           ('↗ 원문 사이트 열기', 'open_link'), ('\n', None)]

@@ -357,22 +357,23 @@ class App(tk.Tk):
             box = ui.card(content, 18, 14)
             box.grid(row=i // 2, column=i % 2, sticky='nsew', padx=(0, px(10)) if i % 2 == 0 else 0, pady=(0, px(10)))
             box.columnconfigure(0, weight=1)
-            if source.mode != 'official':
-                check = ttk.Checkbutton(box, text=source.name, variable=self.source_vars[source.id],
-                                        command=self.sources_changed, style='Source.TCheckbutton', cursor='hand2')
-                check.grid(row=0, column=0, sticky='w')
-                self.source_checks.append(check)
-                indent = px(26)
-            else:
-                tk.Label(box, text=source.name, bg=CARD, fg=INK, font=ui.FONTS['h3']).grid(row=0, column=0, sticky='w', padx=(px(26), 0))
-                indent = px(26)
+            check = ttk.Checkbutton(box, text=source.name, variable=self.source_vars[source.id],
+                                    command=self.sources_changed, style='Source.TCheckbutton', cursor='hand2')
+            check.grid(row=0, column=0, sticky='w')
+            self.source_checks.append(check)
+            indent = px(26)
             ui.badge(box, badges[source.mode], source.mode).grid(row=0, column=1, sticky='e', padx=(px(10), px(6)))
             ttk.Button(box, text='공식 검색 ↗' if source.search_path else '사이트 열기 ↗', style='Quiet.TButton',
                        command=lambda key=source.id: self.open_source(key), cursor='hand2').grid(row=0, column=2, rowspan=2, sticky='e')
             tk.Label(box, text=source.description, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
                      justify='left').grid(row=1, column=0, columnspan=2, sticky='w', padx=(indent, 0), pady=(px(2), 0))
-        tk.Label(page, text='검색어는 첫 번째 별칭을 사용합니다. 규장각·국가기록포털은 검색어를 복사한 뒤 홈페이지를 엽니다. '
-                            '서지 통합은 검색 첫 화면의 미리보기입니다.',
+            if source.mode == 'official':
+                tk.Label(box, text='체크하면 통합 검색을 시작할 때 이 사이트의 검색 화면을 브라우저로 함께 엽니다.',
+                         bg=CARD, fg=ACCENT, font=ui.FONTS['small'], anchor='w', justify='left',
+                         wraplength=px(420)).grid(row=2, column=0, columnspan=3, sticky='w', padx=(indent, 0), pady=(px(4), 0))
+        tk.Label(page, text='공식 사이트 연결(규장각·신문아카이브·국가기록포털)은 앱이 자료를 직접 가져오지 않고, 체크해 두면 '
+                            '검색할 때 그 사이트 검색 화면을 열어 줍니다(기본은 꺼짐). 검색어는 첫 번째 줄을 쓰며 클립보드에도 복사합니다. '
+                            '규장각·국가기록포털은 홈페이지가 열리니 검색창에 붙여넣으세요. 서지 통합은 검색 첫 화면의 미리보기입니다.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='left', wraplength=px(960)).pack(anchor='w', pady=(px(6), 0))
 
     # ── 내 문헌 ────────────────────────────────────────────
@@ -728,6 +729,22 @@ class App(tk.Tk):
     def selected_sources(self):
         return [key for key in AUTO_IDS if self.source_vars[key].get()]
 
+    def selected_official(self):
+        return [s.id for s in SOURCES if s.mode == 'official' and self.source_vars[s.id].get()]
+
+    def _open_officials(self, term, keys):
+        """체크한 공식 사이트 검색 화면을 차례로 엽니다(브라우저가 한꺼번에 몰리지 않게 조금씩 띄움)."""
+        self.clipboard_clear()
+        self.clipboard_append(term)
+        for i, key in enumerate(keys):
+            self.after(600 * i, lambda k=key: self._open_url_quiet(BY_ID[k].search_url(term)))
+
+    def _open_url_quiet(self, url):
+        try:
+            open_web_url(url)
+        except Exception as exc:
+            self._append_log(f'공식 사이트 열기 실패: {url} ({exc})\n')
+
     def select_sources(self, value):
         if self.running:
             return
@@ -737,8 +754,10 @@ class App(tk.Tk):
 
     def sources_changed(self):
         count = len(self.selected_sources())
+        official = len(self.selected_official())
         self.stats['selected'].set(str(count))
-        self.source_summary.set(f'자료원 {count}곳 선택됨 · 변경' if count else '자료원을 선택하세요 →')
+        extra = f' + 공식 사이트 {official}곳' if official else ''
+        self.source_summary.set(f'자료원 {count}곳{extra} 선택됨 · 변경' if count or official else '자료원을 선택하세요 →')
 
     def open_source(self, key):
         term = self.terms.get('1.0', 'end').strip().splitlines()
@@ -897,6 +916,13 @@ class App(tk.Tk):
         if not self.target.get().strip():
             self.target.set(terms[0])  # 연구 대상을 비워 두면 첫 검색어를 대상으로
         sources = self.selected_sources()
+        officials = self.selected_official() if selected is None and self.mode.get() in SEARCH_MODES else []
+        if officials:
+            self._open_officials(terms[0], officials)
+            if not sources:
+                names = ', '.join(BY_ID[k].short for k in officials)
+                self.state.set(f'{names} 검색 화면을 열었습니다. 검색어는 클립보드에 복사했습니다.')
+                return
         if not sources and self.mode.get() not in ('본문 이어받기', '우선 본문 (최대 30건)'):
             messagebox.showinfo('자료원 선택', '자료원 연결에서 통합 검색할 사이트를 한 곳 이상 선택하세요.', parent=self)
             self.show_page('sources')

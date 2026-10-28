@@ -57,7 +57,7 @@ def paragraphs_from_flat(text, hanja=False):
             continue
         cur = ''
         for s in sentences(chunk):
-            cur = f'{cur} {s}'.strip() if cur else s
+            cur = (cur + ('' if hanja else ' ') + s).strip() if cur else s
             if len(cur) >= size:
                 out.append(cur)
                 cur = ''
@@ -206,3 +206,16 @@ def structure(row, folder=None):
             seen.add(n)
             uniq.append(n)
     return {'sections': out, 'notes': uniq, 'from_html': from_html}
+
+
+def snippet_paragraphs(text):
+    """검색 화면 요약 → 문단 목록. '…'로 이어 붙은 조각은 따로, 긴 조각은 문장 단위로 나눕니다."""
+    text = ' '.join(str(text or '').split())
+    if not text:
+        return []
+    out = []
+    for piece in re.split(r'\s*(?:…|\.{3,})\s*', text):
+        piece = piece.strip(' ·')
+        if piece:
+            out += paragraphs_from_flat(piece, is_hanja(piece))
+    return out or [text]
