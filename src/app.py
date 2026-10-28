@@ -1,6 +1,7 @@
 """독립 실행파일 또는 python app.py로 시작."""
 from datetime import datetime
 import json
+import logging
 import re
 import shutil
 import os
@@ -41,6 +42,12 @@ MODES = (
 )
 PRIORITY_N = 30                 # 우선 본문: 관련성 높은 문헌 수
 PRIORITY_FILE = 'priority.json'  # 고른 문헌 목록(결과 창이 이 문헌만 보여 줌)
+PREFETCH_MIN = 100               # 검색 중에 미리 본문을 받을 만큼 확실한 점수(제목에 이름이 그대로 나온 수준)
+PREFETCH_BATCH = 10              # 미리 받기 한 번에 받는 최대 건수
+PREFETCH_DIR = '_미리받기'        # 미리 받기용 임시 폴더(검색과 같은 파일을 동시에 쓰지 않게)
+PREFETCH_DELAY = '3'             # 미리 받기 요청 간격(초): 검색과 겹치므로 더 느리게
+DOWNLOAD_FIELDS = ('body', 'sections', 'metadata', 'classification', 'evidence', 'fetched_at',
+                   'search_title', 'text_file', 'html_file', 'title')
 DEPTHS = (('사이트별 1쪽 (가장 적게)', 1), ('사이트별 3쪽 (권장)', 3), ('사이트별 5쪽', 5),
           ('사이트별 10쪽', 10), ('끝까지 (제한 없음)', 0))
 MODE_HINTS = {
@@ -1073,7 +1080,13 @@ class App(tk.Tk):
                 # ① (새 검색어면) 빠른 검색으로 후보 목록 → ② 관련성 높은 30건 고르기 → ③ 그 30건 본문 받기
                 picked = out / 'selected_keys.json'
                 download = cmd + ['--download-only', '--selected-keys', str(picked)]
-                cmd = ([cmd + ['--quick']] if fresh else []) + [('select', str(out), PRIORITY_N), download]
+                if fresh:
+                    # 검색하는 동안 확실한 상위 문헌(100점 이상)은 옆에서 미리 본문을 받습니다
+                    self._prefetch = {'out': out, 'base': list(cmd), 'done': set(), 'thread': None,
+                                      'closed': False, 'lock': threading.Lock()}
+                    cmd = [cmd + ['--quick'], ('merge', str(out)), ('select', str(out), PRIORITY_N), download]
+                else:
+                    cmd = [('select', str(out), PRIORITY_N), download]
             else:
                 (out / PRIORITY_FILE).unlink(missing_ok=True)   # 다른 방식으로 다시 돌리면 '우선 30건' 표시 해제
             if selected is not None:
@@ -1101,17 +1114,21 @@ class App(tk.Tk):
     def run_collection(self, args):
         """args 하나, 또는 차례로 돌릴 여러 단계(우선 본문: 빠른 검색 → 30건 고르기 → 본문 받기)."""
         steps = args if args and isinstance(args[0], (list, tuple)) else [args]
-        labels = {'quick': '후보 목록 모으기(빠른 검색)', 'select': '관련성 높은 문헌 고르기', 'download': '고른 문헌 본문 받기'}
+        labels = {'quick': '후보 목록 모으기(빠른 검색 · 확실한 상위 문헌은 미리 본문 받기)', 'merge': '미리 받은 본문 합치기',
+                  'select': '관련성 높은 문헌 고르기', 'download': '남은 문헌 본문 받기'}
         result = 0
         for i, step in enumerate(steps):
-            if i and (result not in (0, None) or (self.stop_file and self.stop_file.exists())):
-                break   # 앞 단계가 실패했거나 중단을 눌렀으면 다음 단계는 하지 않음
-            kind = 'select' if isinstance(step, tuple) else 'quick' if '--quick' in step else 'download'
+            # 앞 단계가 실패했거나 중단을 눌렀으면 다음 단계는 하지 않음(미리 받은 본문 합치기는 예외)
+            kind = step[0] if isinstance(step, tuple) else 'quick' if '--quick' in step else 'download'
+            if i and kind != 'merge' and (result not in (0, None) or (self.stop_file and self.stop_file.exists())):
+                break
             if len(steps) > 1:
                 self.events.put(('log', f'── {i + 1}/{len(steps)} 단계: {labels[kind]} ──\n'))
             try:
                 if kind == 'select':
                     result = self._pick_priority(Path(step[1]), step[2])
+                elif kind == 'merge':
+                    self._merge_prefetch(Path(step[1]))
                 else:
                     result = collector.main(step, log_stream=QueueStream(self.events))
             except BaseException:
@@ -1119,20 +1136,135 @@ class App(tk.Tk):
                 result = 1
         self.events.put(('done', result))
 
+    # ── 우선 본문: 검색 중 미리 받기 ──
+
+    def _maybe_prefetch(self):
+        """'목록 저장됨'마다 불림: 확실한 상위 문헌 중 아직 안 받은 것을 옆에서 받습니다(한 번에 한 묶음)."""
+        pf = getattr(self, '_prefetch', None)
+        if not pf:
+            return
+        with pf['lock']:
+            if pf['closed'] or (pf['thread'] and pf['thread'].is_alive()) or len(pf['done']) >= PRIORITY_N:
+                return
+            pf['thread'] = threading.Thread(target=self._prefetch_round, args=(pf,), daemon=True)
+            pf['thread'].start()
+
+    def _prefetch_round(self, pf):
+        out = pf['out']
+        pf['round'] = pf.get('round', 0) + 1
+        pre = out / PREFETCH_DIR / str(pf['round'])   # 묶음마다 따로(앞 묶음에서 받은 본문을 덮어쓰지 않게)
+        try:
+            from result_viewer import read_results
+            src = out / 'collection.sqlite3'
+            if not src.exists():
+                return
+            pre.mkdir(parents=True, exist_ok=True)
+            # 검색이 쓰고 있는 DB를 안전하게 복사(sqlite backup)
+            a = sqlite3.connect(src.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+            b = sqlite3.connect(pre / 'collection.sqlite3')
+            try:
+                a.backup(b)
+            finally:
+                a.close()
+                b.close()
+            for name in ('active_profile.json', 'active_queries.json'):
+                if (out / name).exists():
+                    shutil.copyfile(out / name, pre / name)
+            rows, _ = read_results(pre)
+            # 지금까지 모인 후보 중 '현재 상위 30건' 안에 있고 100점 이상인 것만, 한 번에 최대 10건.
+            # (뒤에 더 나은 문헌이 들어와 밀려날 수 있으니 조금씩 받아 헛수고를 줄입니다)
+            budget = min(PREFETCH_BATCH, PRIORITY_N - len(pf['done']))
+            top = sorted((r for r in rows if r['analysis']['score'] > 0),
+                         key=lambda r: (-r['analysis']['score'], 0 if r.get('key') in pf['done'] else 1,
+                                        str(r.get('key'))))[:PRIORITY_N]
+            picks = [r for r in top if r['analysis']['score'] >= PREFETCH_MIN and not r.get('body')
+                     and r.get('download_supported', True) and r.get('key') not in pf['done']][:budget]
+            if not picks:
+                return
+            keys = [r.get('key') for r in picks]
+            (pre / 'selected_keys.json').write_text(json.dumps(keys, ensure_ascii=False), encoding='utf-8')
+            pf['done'].update(keys)
+            self.events.put(('log', f'[미리 받기] 확실한 상위 문헌 {len(keys)}건의 본문을 검색과 함께 받습니다.\n'))
+            args = pf['base'] + ['--download-only', '--selected-keys', str(pre / 'selected_keys.json'), '--delay', PREFETCH_DELAY]
+            i = args.index('--output')
+            args[i + 1] = str(pre)
+            for flag in ('--queries', '--profile'):
+                if flag in args:
+                    args[args.index(flag) + 1] = str(pre / ('active_queries.json' if flag == '--queries' else 'active_profile.json'))
+            collector.main(args, log_stream=QueueStream(self.events))
+        except Exception:
+            self.events.put(('log', '[미리 받기] 건너뜀: ' + traceback.format_exc().splitlines()[-1] + '\n'))
+
+    def _merge_prefetch(self, out):
+        """검색이 끝나면 미리 받기가 끝나길 기다렸다가 받은 본문을 결과 DB에 합칩니다."""
+        pf = getattr(self, '_prefetch', None)
+        if not pf:
+            return
+        with pf['lock']:
+            pf['closed'] = True
+            thread = pf['thread']
+        if thread and thread.is_alive():
+            self.events.put(('log', '[미리 받기] 받는 중인 본문을 마저 받습니다…\n'))
+            thread.join()
+        self._prefetch = None
+        merged = 0
+        for pre in sorted((out / PREFETCH_DIR).glob('*')):
+            merged += self._merge_one(out, pre)
+        self.events.put(('log', f'[미리 받기] 검색하는 동안 받은 본문 {merged}건을 합쳤습니다.\n'))
+
+    def _merge_one(self, out, pre):
+        db = pre / 'collection.sqlite3'
+        if not db.exists():
+            return 0
+        merged = 0
+        src = sqlite3.connect(db)
+        dst = sqlite3.connect(out / 'collection.sqlite3', timeout=10)
+        try:
+            for key, data, status, error in src.execute("SELECT key,data,status,error FROM documents WHERE status='complete'"):
+                row = dst.execute('SELECT data FROM documents WHERE key=?', (key,)).fetchone()
+                if not row:
+                    continue
+                got, mine = json.loads(data), json.loads(row[0])
+                if mine.get('body'):
+                    continue
+                for f in DOWNLOAD_FIELDS:
+                    if f in got:
+                        v = got[f]
+                        if isinstance(v, str) and v.startswith(str(pre)):
+                            v = str(out) + v[len(str(pre)):]   # 파일 경로를 결과 폴더 쪽으로
+                        mine[f] = v
+                dst.execute('UPDATE documents SET data=?, status=?, error=? WHERE key=?',
+                            (json.dumps(mine, ensure_ascii=False), status, error or '', key))
+                merged += 1
+            dst.commit()
+        finally:
+            src.close()
+            dst.close()
+        # 받은 원문 페이지·본문 파일도 결과 폴더로(이미 있는 것은 그대로)
+        for path in pre.rglob('*'):
+            rel = path.relative_to(pre)
+            if path.is_file() and rel.parts[0] not in ('collection.sqlite3',) and len(rel.parts) > 1:
+                dest = out / rel
+                if not dest.exists():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, dest)
+        return merged
+
     def _pick_priority(self, out, n):
         """모은 후보 중 관련성 점수가 높은 n건을 고릅니다(다른 인물 등 0점 이하는 제외).
         본문을 받을 수 있는 것만 다음 단계로 넘기고, 고른 목록은 결과 창이 그 문헌만 보여 주도록 남깁니다."""
         from result_viewer import read_results
         rows, _ = read_results(out)
+        # 점수가 같으면 이미 본문이 있는 문헌을 먼저(미리 받은 본문이 헛수고가 되지 않게)
         ranked = sorted((r for r in rows if r['analysis']['score'] > 0),
-                        key=lambda r: (-r['analysis']['score'], str(r.get('key'))))[:n]
+                        key=lambda r: (-r['analysis']['score'], 0 if r.get('body') else 1, str(r.get('key'))))[:n]
         keys = [r.get('key') for r in ranked]
         fetch = [r.get('key') for r in ranked if r.get('download_supported', True) and not r.get('body')]
         (out / 'selected_keys.json').write_text(json.dumps(fetch, ensure_ascii=False), encoding='utf-8')
         (out / PRIORITY_FILE).write_text(json.dumps({'keys': keys, 'candidates': len(rows)}, ensure_ascii=False), encoding='utf-8')
         high = sum(1 for r in ranked if r['analysis']['score'] >= 60)
         self.events.put(('log', f'후보 {len(rows)}건 중 관련성 높은 {len(keys)}건을 골랐습니다(60점 이상 {high}건). '
-                                f'본문을 받을 문헌 {len(fetch)}건.\n'))
+                                + (f'남은 본문 {len(fetch)}건을 받습니다.\n' if fetch else '본문은 이미 모두 받았습니다.\n')))
         if not keys:
             self.events.put(('log', '고를 만한 후보가 없습니다. 검색어를 바꾸거나 빠른 검색으로 목록을 확인해 보세요.\n'))
             return 1
@@ -1174,9 +1306,16 @@ class App(tk.Tk):
         self.log.configure(state='disabled')
         if '목록 저장됨' in text:
             self.refresh_counts()
+            self._maybe_prefetch()
 
     def _finish_run(self):
         self.running = False
+        self._prefetch = None
+        if getattr(self, 'active_out', None) is not None and (Path(self.active_out) / PREFETCH_DIR).exists():
+            for h in list(logging.root.handlers):   # 수집기가 열어 둔 기록 파일을 닫아야 Windows에서 지워집니다
+                h.close()
+                logging.root.removeHandler(h)
+            shutil.rmtree(Path(self.active_out) / PREFETCH_DIR, ignore_errors=True)   # 미리 받기 임시 폴더 정리
         self._set_inputs(True)
         self._set_busy(False)
         self.refresh_counts()
