@@ -26,7 +26,6 @@ ROOT = Path(__file__).resolve().parent
 APP_HOME = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
 RESULTS_HOME = APP_HOME / '수집결과'
 SEARCH_MODES = ('빠른 검색 (목록 우선)', '검색 목록만', '전체 수집 / 이어받기')
-VERSION = '3.1'
 
 MODES = (
     ('빠른 검색 (목록 우선)', '빠른 검색'),
@@ -106,7 +105,7 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title(f'HISTRO {VERSION} — 사료 통합 검색과 분석')
+        self.title('HISTRO — 사료 통합 검색과 분석')
         apply_theme(self)
         ui.fit_geometry(self, 1280, 860, 1080, 720)
         self._set_icon()
@@ -191,7 +190,7 @@ class App(tk.Tk):
         names = tk.Frame(brand, bg=NAV)
         names.pack(side='left', padx=(px(12), 0))
         tk.Label(names, text='HISTRO', bg=NAV, fg='white', font=ui.FONTS['brand']).pack(anchor='w')
-        tk.Label(names, text=f'사료 통합 검색 · v{VERSION}', bg=NAV, fg=NAV_MUTED, font=ui.FONTS['small']).pack(anchor='w')
+        tk.Label(names, text='사료 통합 검색', bg=NAV, fg=NAV_MUTED, font=ui.FONTS['small']).pack(anchor='w')
 
         menu = tk.Frame(side, bg=NAV)
         menu.pack(fill='x', padx=px(14), pady=(px(40), 0))

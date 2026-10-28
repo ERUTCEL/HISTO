@@ -7,8 +7,8 @@
 
 ## 내려받기와 실행
 
-1. [release/HISTRO-v3.1.zip](release/HISTRO-v3.1.zip)을 내려받습니다(파일 화면 오른쪽 위 ↓ 버튼).
-2. 압축을 풀고 `HISTRO-v3.1.exe`를 원하는 폴더(예: 바탕화면의 새 폴더)에 둡니다.
+1. [release/HISTRO.zip](release/HISTRO.zip)을 내려받습니다(파일 화면 오른쪽 위 ↓ 버튼).
+2. 압축을 풀고 `HISTRO.exe`를 원하는 폴더(예: 바탕화면의 새 폴더)에 둡니다.
 3. 더블클릭해 실행합니다. 처음에 "Windows의 PC 보호" 창이 뜨면 **추가 정보 → 실행**을 누릅니다.
 
 - Windows 10/11 64비트. Python 등 다른 설치는 필요 없습니다.
