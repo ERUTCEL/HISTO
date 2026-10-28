@@ -126,12 +126,28 @@ def _reading_text(parent, **kw):
     text.tag_configure('note', font=ui.FONTS['small'], foreground=MUTED, lmargin1=px(2), lmargin2=px(2))
     text.tag_configure('body', font=ui.FONTS['reading'], foreground=INK, spacing2=px(5))
     text.tag_configure('error', font=ui.FONTS['small'], foreground='#9A2F1F')
-    text.tag_configure('link', font=ui.FONTS['small'], foreground=ACCENT)
+    text.tag_configure('link', font=ui.FONTS['small'], foreground=ACCENT, underline=True)
+    # 사이트 주소를 누르면 브라우저로 엽니다
+    text.tag_bind('link', '<Enter>', lambda e: text.configure(cursor='hand2'))
+    text.tag_bind('link', '<Leave>', lambda e: text.configure(cursor='arrow'))
+    text.tag_bind('link', '<Button-1>', lambda e: _open_link(text, e))
     # 검색어 강조: 놓인 자리 글꼴 크기에 맞춰 굵게 + 옅은 노랑
     text.tag_configure('hit', font=ui.FONTS['reading_b'], background='#FFEFA8')
     text.tag_configure('hit_small', font=ui.FONTS['small_b'], background='#FFEFA8')
     text.tag_configure('hit_bg', background='#FFEFA8')
     return text
+
+
+def _open_link(text, event):
+    index = text.index(f'@{event.x},{event.y}')
+    rng = text.tag_prevrange('link', f'{index}+1c')
+    url = text.get(*rng).strip() if rng else ''
+    if url.startswith(('http://', 'https://')):
+        try:
+            open_web_url(url)
+        except Exception as exc:
+            messagebox.showerror('주소 열기', str(exc), parent=text.winfo_toplevel())
+    return 'break'
 
 
 class RelationsWindow(tk.Toplevel):
