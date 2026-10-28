@@ -198,6 +198,18 @@ class BookmarkStore:
         rf = str(result_folder)
         return {it.get('key') for it in self.by_id.values() if it.get('result_folder') == rf}
 
+    def repoint(self, old_folder, new_folder):
+        """임시 검색결과를 저장한 검색으로 옮기면, 그 결과를 가리키던 즐겨찾기도 새 폴더를 가리키게."""
+        old_folder, new_folder = str(old_folder), str(new_folder)
+        touched = set()
+        for it in self.by_id.values():
+            if it.get('result_folder') == old_folder:
+                it['result_folder'] = new_folder
+                touched.add(it['category'])
+        for name in touched:
+            self._write(name)
+        return len(touched)
+
     def export_csv(self, name, path):
         with open(path, 'w', encoding='utf-8-sig', newline='') as f:
             w = csv.writer(f)

@@ -2,6 +2,7 @@
 from datetime import datetime
 import json
 import re
+import shutil
 import os
 from pathlib import Path
 import queue
@@ -26,7 +27,8 @@ from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LI
 
 ROOT = Path(__file__).resolve().parent
 APP_HOME = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
-RESULTS_HOME = APP_HOME / '수집결과'
+WORK_DIR = APP_HOME / '임시 검색결과'   # 검색 결과는 여기에만 담고, 새 검색을 하면 바뀝니다
+SAVED_HOME = APP_HOME / '저장한 검색'  # '이 검색 저장'으로 남긴 검색
 SEARCH_MODES = ('빠른 검색 (목록 우선)', '검색 목록만', '전체 수집 / 이어받기')
 
 MODES = (
@@ -40,7 +42,7 @@ DEPTHS = (('사이트별 1쪽 (가장 적게)', 1), ('사이트별 3쪽 (권장)
           ('사이트별 10쪽', 10), ('끝까지 (제한 없음)', 0))
 MODE_HINTS = {
     '빠른 검색 (목록 우선)': '최대 20회 새 요청으로 서지·요약과 첫 목록을 모읍니다.',
-    '우선 본문 (최대 30건)': '저장된 목록에서 60점 이상 후보를 점수순으로 최대 30건 받습니다.',
+    '우선 본문 (최대 30건)': '새 검색어면 검색한 뒤 60점 이상 후보의 본문을 점수순으로 최대 30건 받습니다. 같은 검색어면 저장된 목록에서 이어 받습니다.',
     '전체 수집 / 이어받기': '찾은 후보의 본문을 모두 받습니다. 오래 걸릴 수 있으니 검색 범위를 좁게 시작하세요.',
     '검색 목록만': '본문 없이 검색 목록만 저장합니다. 사이트별로 볼 쪽 수는 아래 검색 범위에서 고릅니다.',
     '본문 이어받기': '저장된 목록에서 아직 받지 않은 본문을 이어서 받습니다.',
@@ -114,7 +116,8 @@ class App(tk.Tk):
         self.worker = None
         self.running = False
         self.events = queue.Queue()
-        self.output = tk.StringVar(value=str(APP_HOME / '수집결과'))
+        self.output = tk.StringVar(value=str(WORK_DIR))
+        self.saved_home = SAVED_HOME
         self.target = tk.StringVar(value='')
         self.mode = tk.StringVar(value='빠른 검색 (목록 우선)')
         self.mode_hint = tk.StringVar(value=MODE_HINTS[self.mode.get()])
@@ -333,7 +336,7 @@ class App(tk.Tk):
         ttk.Button(buttons, text='문헌 결과 보기  →', style='Large.TButton', command=self.view, cursor='hand2').pack(side='right')
         self.reset_button = ttk.Button(buttons, text='↺ 검색 초기화', style='Link.TButton', command=self.reset_search, cursor='hand2')
         self.reset_button.pack(side='right', padx=(0, px(10)))
-        tk.Label(page, text='빠른 검색은 후보 목록부터 모읍니다. 필요한 문헌만 골라 본문을 받을 수 있습니다.',
+        tk.Label(page, text='검색 결과는 \'임시 검색결과\'에 담기고 새 검색을 하면 바뀝니다. 남기고 싶으면 결과 창의 \'이 검색 저장\'이나 즐겨찾기를 쓰세요.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
 
     # ── 자료원 연결 ────────────────────────────────────────
@@ -384,7 +387,7 @@ class App(tk.Tk):
         info = ui.card(page, 24, 18)
         info.pack(fill='x', pady=(0, px(16)))
         ttk.Button(info, text='문헌·분석 열기', style='Primary.TButton', command=self.view, cursor='hand2').pack(side='right')
-        ttk.Button(info, text='기존 결과 폴더 선택', style='Large.TButton', command=self.choose, cursor='hand2').pack(side='right', padx=(px(16), px(10)))
+        ttk.Button(info, text='저장한 검색 열기', style='Large.TButton', command=self.choose, cursor='hand2').pack(side='right', padx=(px(16), px(10)))
         text = tk.Frame(info, bg=CARD, width=px(200))
         text.pack(side='left', fill='x', expand=True)
         tk.Label(text, text='현재 보관함', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
@@ -816,8 +819,9 @@ class App(tk.Tk):
         return any((folder / name).exists() for name in ('collection.sqlite3', 'documents.jsonl'))
 
     def _search_folder(self, out, target, terms):
-        """검색마다 결과 폴더를 나눕니다. 같은 대상·같은 검색어면 그 폴더에 이어 저장하고,
-        검색어가 바뀌었거나 '검색 초기화' 뒤라면 새 폴더를 만듭니다(이전 결과와 섞이지 않게)."""
+        """새 검색은 '임시 검색결과' 한 곳에 담습니다(결과가 폴더로 쌓이지 않게).
+        같은 대상·같은 검색어로 다시 검색하면 지금 폴더에 이어 저장합니다.
+        저장하지 않은 임시 결과가 있으면 지워도 되는지 먼저 묻습니다. 취소하면 None."""
         fresh = getattr(self, '_fresh_next', False)
         self._fresh_next = False
         if not self._has_results(out):
@@ -830,14 +834,38 @@ class App(tk.Tk):
                     return out
             except (OSError, ValueError, AttributeError):
                 pass
-        base = RESULTS_HOME if out == RESULTS_HOME.resolve() or out.parent == RESULTS_HOME.resolve() else out.parent
-        name = re.sub(r'[\\/:*?"<>|\r\n\t]', ' ', target or terms[0]).strip()[:40] or '검색'
-        folder = base / f"{name} {datetime.now():%Y-%m-%d %H%M}"
-        n = 2
-        while folder.exists():
-            folder = base / f"{name} {datetime.now():%Y-%m-%d %H%M} ({n})"
-            n += 1
-        return folder
+        work = WORK_DIR.resolve()
+        if self._has_results(work) and not (work / '.saved').exists():
+            count = self._count_records(work)
+            if not messagebox.askyesno('새 검색', f'지금 임시 검색결과({count}건)는 저장하지 않았습니다.\n'
+                                       '지우고 새로 검색할까요?\n\n남기려면 \'아니요\'를 누른 뒤 결과 창에서 '
+                                       '\'이 검색 저장\'을 누르거나 필요한 문헌을 즐겨찾기 하세요.', parent=self):
+                self._fresh_next = fresh
+                return None
+        self._clear_work()
+        return work
+
+    def _count_records(self, folder):
+        try:
+            with sqlite3.connect((folder / 'collection.sqlite3').resolve().as_uri() + '?mode=ro', uri=True, timeout=1) as conn:
+                return conn.execute('SELECT COUNT(*) FROM documents').fetchone()[0]
+        except (sqlite3.Error, OSError):
+            return 0
+
+    def _clear_work(self):
+        """임시 검색결과 폴더를 비웁니다(이 폴더만, 다른 곳은 건드리지 않음)."""
+        work = WORK_DIR.resolve()
+        window = getattr(self, 'result_window', None)
+        if window is not None and window.winfo_exists() and Path(window.folder) == work:
+            window.destroy()   # 열려 있는 파일을 놓아 주기
+        if work.name == '임시 검색결과' and work.is_dir():
+            for child in work.iterdir():
+                try:
+                    shutil.rmtree(child) if child.is_dir() else child.unlink()
+                except OSError:
+                    pass
+        work.mkdir(parents=True, exist_ok=True)
+        self._just_cleared = True
 
     def _load_settings(self):
         """마지막으로 고른 검색 방식·범위·자료원·저장 위치를 불러옵니다."""
@@ -896,20 +924,21 @@ class App(tk.Tk):
         self.mode_hint.set(MODE_HINTS.get(mode, ''))
         searching = mode in ('빠른 검색 (목록 우선)', '검색 목록만', '전체 수집 / 이어받기')
         if hasattr(self, 'depth_box'):
-            self.depth_box.configure(state='readonly' if mode in ('검색 목록만', '전체 수집 / 이어받기') else 'disabled')
+            self.depth_box.configure(state='readonly' if mode in ('검색 목록만', '전체 수집 / 이어받기', '우선 본문 (최대 30건)') else 'disabled')
         if mode == '전체 수집 / 이어받기':
             self.state.set('전체 수집: 찾은 후보의 본문을 모두 받습니다. 오래 걸릴 수 있으니 검색 범위를 확인하세요.')
         elif mode == '빠른 검색 (목록 우선)':
             self.state.set('빠른 검색: 사이트마다 첫 쪽만, 최대 20회 요청으로 목록을 모읍니다.')
         elif mode == '우선 본문 (최대 30건)':
-            self.state.set('저장된 목록에서 60점 이상 후보를 점수순으로 최대 30건 받습니다. 누락 후보는 결과 보기에서 직접 선택할 수 있습니다.')
+            self.state.set('우선 본문: 새 검색어면 새 폴더에서 검색 후 60점 이상 후보 본문을 최대 30건, 같은 검색어면 저장된 목록에서 이어 받습니다.')
         elif not searching:
             self.state.set('저장된 목록에서 아직 받지 않은 본문을 이어서 받습니다.')
 
     def choose(self):
         if self.running:
             return
-        folder = filedialog.askdirectory(parent=self, initialdir=self.output.get())
+        folder = filedialog.askdirectory(parent=self, title='저장한 검색 열기',
+                                         initialdir=SAVED_HOME if SAVED_HOME.is_dir() else self.output.get())
         if folder:
             self.output.set(folder)
             settings.save(output=str(Path(folder).resolve()))
@@ -942,31 +971,42 @@ class App(tk.Tk):
         if not self.target.get().strip():
             self.target.set(terms[0])  # 연구 대상을 비워 두면 첫 검색어를 대상으로
         sources = self.selected_sources()
-        officials = self.selected_official() if selected is None and self.mode.get() in SEARCH_MODES else []
+        mode = self.mode.get()
+        out = Path(self.output.get()).resolve()
+        fresh_before = getattr(self, '_fresh_next', False)
+        new_out, fresh = out, False
+        if selected is None and profile_override is None and mode in SEARCH_MODES + ('우선 본문 (최대 30건)',):
+            new_out = self._search_folder(out, self.target.get().strip(), terms)
+            if new_out is None:
+                self.state.set('새 검색을 취소했습니다. 결과 창에서 \'이 검색 저장\'으로 지금 결과를 남길 수 있습니다.')
+                return
+            # 우선 본문: 새 검색(새 폴더·빈 폴더)이면 검색부터, 아니면 저장된 목록에서 이어 받기
+            fresh = mode in SEARCH_MODES or new_out != out or not self._has_results(out)
+        officials = self.selected_official() if fresh else []
         if officials:
             self._open_officials(terms[0], officials)
             if not sources:
                 names = ', '.join(BY_ID[k].short for k in officials)
                 self.state.set(f'{names} 검색 화면을 열었습니다. 검색어는 클립보드에 복사했습니다.')
+                self._fresh_next = fresh_before
                 return
-        if not sources and self.mode.get() not in ('본문 이어받기', '우선 본문 (최대 30건)'):
+        if not sources and fresh:
+            self._fresh_next = fresh_before
             messagebox.showinfo('자료원 선택', '자료원 연결에서 통합 검색할 사이트를 한 곳 이상 선택하세요.', parent=self)
             self.show_page('sources')
             return
-        out = Path(self.output.get()).resolve()
-        if selected is None and profile_override is None and self.mode.get() in SEARCH_MODES:
-            new_out = self._search_folder(out, self.target.get().strip(), terms)
-            if new_out != out:
-                self.output.set(str(new_out))
-                self.refresh_counts()
-                self._log_note = f'새 검색이라 결과를 새 폴더에 따로 저장합니다: {new_out.name}\n'
-            out = new_out
+        cleared, self._just_cleared = getattr(self, '_just_cleared', False), False
+        if new_out != out or cleared:
+            self.output.set(str(new_out))
+            self.refresh_counts()
+            self._log_note = '새 검색: 결과를 임시 검색결과에 담습니다. 남기려면 결과 창의 \'이 검색 저장\'을 누르세요.\n'
+        out = new_out
         profile = hf.apply(profile_override or profile_for_target(self.target.get()))
         saved_profile = out / 'active_profile.json'
         if not profile_override and saved_profile.exists():
             try:
                 saved = json.loads(saved_profile.read_text(encoding='utf-8'))
-                if saved.get('target') == profile['target']:
+                if saved.get('target') == profile['target'] or not fresh:   # 본문만 받을 때는 그 폴더 설정 그대로
                     profile = hf.apply(saved)
             except (ValueError, OSError):
                 pass
@@ -978,25 +1018,26 @@ class App(tk.Tk):
             self.stop_file = out / 'stop.request'
             self.stop_file.unlink(missing_ok=True)
             query = out / 'active_queries.json'
-            query.write_text(json.dumps({'terms': terms}, ensure_ascii=False), encoding='utf-8')
+            if fresh or not query.exists():   # 본문만 받을 때는 그 폴더의 검색어를 덮어쓰지 않습니다
+                query.write_text(json.dumps({'terms': terms}, ensure_ascii=False), encoding='utf-8')
             profile_path = out / 'active_profile.json'
             profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding='utf-8')
             cmd = ['--queries', str(query), '--output', str(out), '--stop-file', str(self.stop_file),
                    '--profile', str(profile_path)]
             if sources:
                 cmd += ['--sources', ','.join(sources)]
-            if self.mode.get() == '빠른 검색 (목록 우선)':
+            if mode == '빠른 검색 (목록 우선)':
                 cmd += ['--quick']
-            if self.mode.get() == '검색 목록만':
+            if mode == '검색 목록만':
                 cmd += ['--search-only']
-            if self.mode.get() in ('검색 목록만', '전체 수집 / 이어받기'):
+            if mode in ('검색 목록만', '전체 수집 / 이어받기') or (mode == '우선 본문 (최대 30건)' and fresh):
                 pages = dict(DEPTHS).get(self.depth.get(), 3)
                 if pages:
                     cmd += ['--max-pages', str(pages)]
-            if self.mode.get() == '본문 이어받기':
+            if mode == '본문 이어받기':
                 cmd += ['--download-only']
-            if self.mode.get() == '우선 본문 (최대 30건)':
-                cmd += ['--download-only', '--min-score', '60', '--max-documents', '30']
+            if mode == '우선 본문 (최대 30건)':
+                cmd += ([] if fresh else ['--download-only']) + ['--min-score', '60', '--max-documents', '30']
             if selected is not None:
                 selected_file = out / 'selected_keys.json'
                 selected_file.write_text(json.dumps(selected, ensure_ascii=False), encoding='utf-8')

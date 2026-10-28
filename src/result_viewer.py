@@ -10,6 +10,8 @@ from collections import Counter
 
 import functools
 import re
+import shutil
+from datetime import datetime
 
 import analysis_engine as _engine
 from analysis_engine import analyze, default_profile
@@ -316,7 +318,9 @@ class ResultsWindow(tk.Toplevel):
                  justify='left').pack(anchor='w', pady=(px(3), 0))
         tk.Label(titles, textvariable=self.learn_info, bg=CARD, fg=ACCENT, font=ui.FONTS['label_sm'], anchor='w',
                  justify='left').pack(anchor='w', pady=(px(2), 0))
-        ttk.Button(head, text='다른 결과 폴더', command=self.choose_folder, cursor='hand2').pack(side='right', anchor='n')
+        ttk.Button(head, text='저장한 검색 열기', command=self.choose_folder, cursor='hand2').pack(side='right', anchor='n')
+        ttk.Button(head, text='이 검색 저장', style='Primary.TButton', command=self.save_search,
+                   cursor='hand2').pack(side='right', anchor='n', padx=(0, px(8)))
         ttk.Button(head, text='파일 폴더 열기', command=self.open_folder, cursor='hand2').pack(side='right', anchor='n', padx=(0, px(8)))
 
         controls = tk.Frame(top, bg=CARD)
@@ -1187,8 +1191,49 @@ class ResultsWindow(tk.Toplevel):
         except Exception as exc:
             messagebox.showerror('원문 열기', str(exc), parent=self)
 
+    def _saved_home(self):
+        home = getattr(self.master, 'saved_home', None)
+        return Path(home) if home else self.folder.parent / '저장한 검색'
+
+    def save_search(self):
+        """지금 보는 검색 결과를 이름을 붙여 '저장한 검색'에 보관합니다."""
+        target = (self.profile or {}).get('target') or '검색'
+        name = simpledialog.askstring('이 검색 저장', '저장할 이름을 적으세요.\n(문헌·본문·판정·주제 표시가 함께 저장됩니다)',
+                                      initialvalue=f'{target} {datetime.now():%Y-%m-%d}', parent=self)
+        name = bm.clean_name(name or '')
+        if not name:
+            return
+        home = self._saved_home()
+        dest = home / name
+        if dest.resolve() == self.folder:
+            return
+        if dest.exists():
+            if not messagebox.askyesno('이 검색 저장', f'「{name}」이(가) 이미 있습니다. 덮어쓸까요?', parent=self):
+                return
+            shutil.rmtree(dest, ignore_errors=True)
+        try:
+            home.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(self.folder, dest, ignore=shutil.ignore_patterns('stop.request', '*.tmp', '.saved'))
+            (self.folder / '.saved').write_text(str(dest), encoding='utf-8')
+        except OSError as exc:
+            messagebox.showerror('이 검색 저장', f'저장하지 못했습니다.\n{exc}', parent=self)
+            return
+        old = self.folder
+        self.bm.repoint(old, dest.resolve())
+        self.folder = dest.resolve()
+        app = self.master
+        if hasattr(app, 'output') and not getattr(app, 'running', False):
+            app.output.set(str(self.folder))
+            settings.save(output=str(self.folder))
+            if hasattr(app, 'refresh_counts'):
+                app.refresh_counts()
+        self.reload()
+        messagebox.showinfo('이 검색 저장', f'「{name}」으로 저장했습니다.\n{self.folder}\n\n'
+                            '이제 이 창에서 하는 판정·표시는 저장한 검색에 기록됩니다.', parent=self)
+
     def choose_folder(self):
-        folder = filedialog.askdirectory(parent=self, title='기존 수집결과 폴더 선택', initialdir=self.folder)
+        home = self._saved_home()
+        folder = filedialog.askdirectory(parent=self, title='저장한 검색 열기', initialdir=home if home.is_dir() else self.folder)
         if folder:
             self.folder = Path(folder).resolve()
             self.reload()
