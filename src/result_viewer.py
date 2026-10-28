@@ -19,6 +19,7 @@ import ranker
 import textlab as tl
 import mtl
 import bookmarks as bm
+import reader
 from textlab_ui import TextLabWindow
 import ui_theme as ui
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, ACCENT, LINE, ACCENT_PALE, NEUTRAL_PALE,
@@ -403,6 +404,21 @@ class ResultsWindow(tk.Toplevel):
         self.detail.tag_bind('open_link', '<Enter>', lambda e: self.detail.configure(cursor='hand2'))
         self.detail.tag_bind('open_link', '<Leave>', lambda e: self.detail.configure(cursor='arrow'))
         self.detail.tag_configure('open_link', font=ui.FONTS['label'], foreground=ACCENT, underline=True)
+        # 정리된 본문: 문단 간격, 원문(한문)·주석 접기, 주석 표시([註 001]) 누르면 해당 풀이로
+        self._show_hanja = False
+        self._show_notes = False
+        self._struct = {}
+        self.detail.tag_configure('para', spacing1=px(2), spacing3=px(14))
+        self.detail.tag_configure('hanja_t', spacing2=px(7))
+        self.detail.tag_configure('noteitem', font=ui.FONTS['small'], foreground=INK, lmargin1=px(4), lmargin2=px(22),
+                                  spacing3=px(7))
+        self.detail.tag_configure('fn', font=ui.FONTS['small'], foreground=ACCENT, offset=px(4))
+        self.detail.tag_configure('flash', background='#FFEFA8')
+        for tag, func in (('tg_hanja', lambda e: self._toggle('hanja')), ('tg_notes', lambda e: self._toggle('notes')),
+                          ('fn', self._jump_note)):
+            self.detail.tag_bind(tag, '<Button-1>', func)
+            self.detail.tag_bind(tag, '<Enter>', lambda e: self.detail.configure(cursor='hand2'))
+            self.detail.tag_bind(tag, '<Leave>', lambda e: self.detail.configure(cursor='arrow'))
         self.bind('<Return>', lambda e: self.expand_body() if e.widget in (self.tree, self.detail) else None)
         self._split = split
         split.bind('<Configure>', self._place_sash)
@@ -435,6 +451,7 @@ class ResultsWindow(tk.Toplevel):
         try:
             self.rows, self.profile = read_results(self.folder)
             self._fetching.clear()
+            self._struct = {}
         except Exception as exc:
             self.rows, self.filtered, self.shown = [], [], {}
             children = self.tree.get_children()
@@ -695,13 +712,17 @@ class ResultsWindow(tk.Toplevel):
         self.fav_button.configure(text=f'★ 즐겨찾기됨 · {doc["category"]}' if doc else '☆ 즐겨찾기')
         if not key:
             return
+        text = None
         for it in self.bm.excerpts_of(self.folder, key):
             probe = (it.get('text') or '').strip()
             if not probe:
                 continue
-            start = self.detail.search(probe[:80], '1.0', 'end')
-            if start:
-                self.detail.tag_add('saved', start, f'{start}+{len(probe)}c')
+            if text is None:
+                text = self.detail.get('1.0', 'end-1c')
+            rx = _terms_regex([probe[:2000]])
+            m = rx.search(text) if rx else None
+            if m:
+                self.detail.tag_add('saved', f'1.0+{m.start()}c', f'1.0+{m.end()}c')
 
     def toggle_favorite(self, category=None):
         rows = self.selected()
@@ -955,6 +976,89 @@ class ResultsWindow(tk.Toplevel):
             self.detail.insert('end', text, tag)
         self.detail.configure(state='disabled')
 
+    def _structured(self, row):
+        key = row.get('key')
+        doc = self._struct.get(key)
+        if doc is None:
+            try:
+                doc = reader.structure(row, self.folder)
+            except Exception:
+                doc = {'sections': [{'label': '본문', 'paras': [row['body']], 'hanja': False}], 'notes': []}
+            self._struct[key] = doc
+        return doc
+
+    @staticmethod
+    def _para_parts(text, tags):
+        out, pos = [], 0
+        for m in reader.MARK.finditer(text):
+            if m.start() > pos:
+                out.append((text[pos:m.start()], tags))
+            out.append((m.group(0), tags + ('fn',)))
+            pos = m.end()
+        out.append((text[pos:] + '\n', tags))
+        return out
+
+    def _hit_count(self, texts):
+        rx = getattr(self, 'hl_re', None)
+        return sum(len(rx.findall(t)) for t in texts) if rx else 0
+
+    def _body_parts(self, row):
+        doc = self._structured(row)
+        secs = doc['sections']
+        has_ko = any(not s['hanja'] for s in secs)
+        parts = []
+        for sec in secs:
+            foldable = sec['hanja'] and has_ko
+            if foldable:
+                hits = self._hit_count(sec['paras'])
+                opened = self._show_hanja
+                parts.append((f"{'▾' if opened else '▸'} {sec['label']} · 한문 {len(''.join(sec['paras'])):,}자"
+                               + (f' · 검색어 {hits}곳' if hits and not opened else '')
+                               + ('  (접기)' if opened else '  (펼치기)') + '\n', ('head', 'tg_hanja')))
+                if not opened:
+                    continue
+            else:
+                parts.append((sec['label'] + '\n', 'head'))
+            for p in sec['paras']:
+                parts += self._para_parts(p, ('body', 'para') + (('hanja_t',) if sec['hanja'] else ()))
+        notes = doc['notes']
+        if notes:
+            opened = self._show_notes
+            parts.append((f"{'▾' if opened else '▸'} 주석 · 낱말 풀이 {len(notes)}개" + ('  (접기)' if opened else '  (펼치기)') + '\n',
+                          ('head', 'tg_notes')))
+            if opened:
+                for n in notes:
+                    parts += self._para_parts(n, ('noteitem',))
+        return parts
+
+    def _toggle(self, what):
+        if what == 'hanja':
+            self._show_hanja = not self._show_hanja
+        else:
+            self._show_notes = not self._show_notes
+        top = self.detail.yview()[0]
+        self.show_selected()
+        self.detail.yview_moveto(top)
+        return 'break'
+
+    def _jump_note(self, event):
+        index = self.detail.index(f'@{event.x},{event.y}')
+        rng = self.detail.tag_prevrange('fn', f'{index}+1c')
+        mark = self.detail.get(*rng) if rng else ''
+        if not self._show_notes:
+            self._show_notes = True
+            top = self.detail.yview()[0]
+            self.show_selected()
+            self.detail.yview_moveto(top)
+        head = self.detail.tag_ranges('tg_notes')
+        found = self.detail.search(mark, head[0], 'end') if mark and head else ''
+        if found:
+            self.detail.tag_remove('flash', '1.0', 'end')
+            self.detail.tag_add('flash', found, f'{found} lineend')
+            self.detail.see(found)
+            self.after(1800, lambda: self.detail.winfo_exists() and self.detail.tag_remove('flash', '1.0', 'end'))
+        return 'break'
+
     def show_selected(self, event=None):
         rows = self.selected()
         if not rows:
@@ -978,7 +1082,7 @@ class ResultsWindow(tk.Toplevel):
             (row.get('url', '') + '\n', 'link'),
         ]
         if row.get('body'):
-            parts += [('본문\n', 'head'), (row['body'] + '\n', 'body')]
+            parts += self._body_parts(row)
         else:
             parts += [('검색 화면에 보인 일부\n', 'head'),
                       ((row.get('snippet') or '(검색 화면에 보인 글이 없습니다)') + '\n', 'body')]
