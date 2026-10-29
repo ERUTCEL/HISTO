@@ -23,6 +23,7 @@ import bookmarks as bm
 import history_fields as hf
 import settings
 import hanja_input
+import aliases
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_STRONG,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
                       NAV_MUTED, NAV_LINE)
@@ -64,6 +65,15 @@ PAGES = (
     ('favorites', '즐겨찾기', '읽다가 남겨 둔 문헌과 발췌를 분류별로 모아 봅니다. 분류마다 파일로 저장되어 메모장·워드로도 열립니다.'),
     ('activity', '진행 기록', '자료원 응답과 수집 상태를 기록합니다. 첫 목록이 저장되면 결과 창에서 바로 확인하세요.'),
 )
+
+
+def _body_tier(row):
+    """0 본문 있음 · 1 본문을 받을 수 있음 · 2 서지·요약만(받을 수 없음)"""
+    if row.get('body'):
+        return 0
+    if row.get('status') == 'catalog' or row.get('download_supported') is False:
+        return 2
+    return 1
 
 
 class QueueStream:
@@ -955,9 +965,19 @@ class App(tk.Tk):
         if not name:
             return
         profile = profile_for_target(name)
+        if self._is_default_target(name):
+            terms = profile['quick_terms']
+        else:
+            terms = aliases.suggest(name)   # 다른 이름·한자 표기(장희빈 → 희빈 장씨 · 張禧嬪 · 禧嬪張氏)
         self.terms.delete('1.0', 'end')
-        self.terms.insert('1.0', '\n'.join(profile['quick_terms']))
-        self.state.set('대상 적용: ' + name + ' · 다른 인물은 입력 이름만 직접 명칭으로 사용합니다. 별칭은 검색어에 추가하세요.')
+        self.terms.insert('1.0', '\n'.join(terms))
+        extra = [t for t in terms if t != name]
+        self.state.set('대상 적용: ' + name + (' · 다른 이름·한자 표기 ' + ', '.join(extra) + ' 도 함께 찾습니다. 틀린 것은 검색어 칸에서 지우세요.'
+                                              if extra else ' · 다른 이름이 있으면 검색어 칸에 한 줄씩 더하세요.'))
+
+    @staticmethod
+    def _is_default_target(name):
+        return re.sub(r'\s+', '', name or '') == re.sub(r'\s+', '', default_profile()['target'])
 
     def mode_changed(self, event=None):
         mode = self.mode.get()
@@ -1053,6 +1073,16 @@ class App(tk.Tk):
         if not profile['target'].strip():
             messagebox.showerror('분석 대상', '분석 대상 이름을 입력하세요.', parent=self)
             return
+        if not profile_override and not self._is_default_target(profile['target']):
+            # 다른 인물: 검색어 칸의 이름들과 만든 다른 이름을 모두 '직접 명칭'으로(점수에서 같은 인물로 봄)
+            names = list(profile.get('direct_aliases') or []) + terms + aliases.suggest(profile['target'])
+            seen, merged = set(), []
+            for n in names:
+                k = re.sub(r'\s+', '', n)
+                if k and k not in seen:
+                    seen.add(k)
+                    merged.append(n)
+            profile['direct_aliases'] = merged
         try:
             out.mkdir(parents=True, exist_ok=True)
             self.stop_file = out / 'stop.request'
@@ -1178,7 +1208,7 @@ class App(tk.Tk):
             # (뒤에 더 나은 문헌이 들어와 밀려날 수 있으니 조금씩 받아 헛수고를 줄입니다)
             budget = min(PREFETCH_BATCH, PRIORITY_N - len(pf['done']))
             top = sorted((r for r in rows if r['analysis']['score'] > 0),
-                         key=lambda r: (-r['analysis']['score'], 0 if r.get('key') in pf['done'] else 1,
+                         key=lambda r: (-r['analysis']['score'], 0 if r.get('key') in pf['done'] else _body_tier(r),
                                         str(r.get('key'))))[:PRIORITY_N]
             picks = [r for r in top if r['analysis']['score'] >= PREFETCH_MIN and not r.get('body')
                      and r.get('download_supported', True) and r.get('key') not in pf['done']][:budget]
@@ -1258,9 +1288,9 @@ class App(tk.Tk):
         본문을 받을 수 있는 것만 다음 단계로 넘기고, 고른 목록은 결과 창이 그 문헌만 보여 주도록 남깁니다."""
         from result_viewer import read_results
         rows, _ = read_results(out)
-        # 점수가 같으면 이미 본문이 있는 문헌을 먼저(미리 받은 본문이 헛수고가 되지 않게)
+        # 점수가 같으면 ① 본문을 이미 받은 것 ② 본문을 받을 수 있는 것 ③ 서지·요약만 있는 것 순서
         ranked = sorted((r for r in rows if r['analysis']['score'] > 0),
-                        key=lambda r: (-r['analysis']['score'], 0 if r.get('body') else 1, str(r.get('key'))))[:n]
+                        key=lambda r: (-r['analysis']['score'], _body_tier(r), str(r.get('key'))))[:n]
         keys = [r.get('key') for r in ranked]
         fetch = [r.get('key') for r in ranked if r.get('download_supported', True) and not r.get('body')]
         (out / 'selected_keys.json').write_text(json.dumps(fetch, ensure_ascii=False), encoding='utf-8')
