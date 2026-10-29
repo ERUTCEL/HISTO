@@ -173,9 +173,12 @@ def read_results(folder, profile=None):
     # 시대 가중치: 대상의 큰 시대(고대·고려·조선·근대·일제강점기·현대)와 다른 시대의 기록은 낮춤.
     # 대상 시대는 직접 고른 값(설정 '대상 시대')이 있으면 그것, 없으면 자동(직접 언급 사료의 최빈 시대)
     choice = profile.get('era_choice')
-    era = period.ERAS.index(choice) if choice in period.ERAS else period.target_era(rows, secondary_kind)
+    if choice in period.ERAS:
+        era, candidates = period.ERAS.index(choice), []
+    else:
+        era, candidates = period.target_era(rows, secondary_kind)   # 확실할 때만 시대가 정해짐
     period.apply_era(rows, era)
-    profile = dict(profile, _era=era, _era_auto=choice not in period.ERAS)
+    profile = dict(profile, _era=era, _era_auto=choice not in period.ERAS, _era_candidates=candidates)
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
     return rows, profile
 
@@ -665,6 +668,10 @@ class ResultsWindow(tk.Toplevel):
         era = (self.profile or {}).get('_era')
         if era is not None:
             prio += f"  ·  대상 시대: {period.ERAS[era]}{'(자동)' if (self.profile or {}).get('_era_auto') else ''}"
+        else:
+            cands = (self.profile or {}).get('_era_candidates') or []
+            prio += ('  ·  대상 시대가 확실하지 않아 시대 가중치를 쓰지 않습니다'
+                     + (f"(후보: {'·'.join(period.ERAS[c] for c in cands)}) — 오른쪽 '대상 시대'에서 고르세요" if cands else ''))
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))

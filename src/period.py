@@ -6,6 +6,7 @@
   승정원일기 SJW-F45… → 영조 45년 → 1769
   신문  npjj_1936_… → 1936
 """
+import collections
 import re
 
 # 실록 왕대 코드 → 즉위 연도(재위 n년 = 즉위 연도 + n)
@@ -32,6 +33,12 @@ def year_from_key(row):
     if m:
         return SJW_KINGS[m.group(1)] + int(m.group(2))
     m = re.search(r'_(1[89]\d{2}|20[0-2]\d)_\d{2}_\d{2}', key)   # 신문 npjj_1936_06_07
+    if m:
+        return int(m.group(1))
+    m = re.search(r'db:(?:tcko|tcmd|tcct)_(\d{4})_', key)   # 고대사·근대사·대한민국사 연표: tcko_0413 → 413
+    if m and int(m.group(1)) > 0:
+        return int(m.group(1))
+    m = re.search(r'db:ch_\d{3}_(\d{4})_', key)             # 주제별연표 ch_007_1135 → 1135
     if m:
         return int(m.group(1))
     return SOURCE_YEARS.get(str(row.get('source') or ''))
@@ -66,22 +73,37 @@ def era_of(year):
     return i
 
 
+def _direct(r):
+    return any('직접명칭' in x for x in r['analysis'].get('score_reasons', []))
+
+
 def target_era(rows, other_kind=lambda r: None):
-    """대상 이름이 직접 나오는 사료(연구 문헌·후대 서술 제외)가 가장 많은 시대. 근거가 3건 미만이면 None."""
-    counts = [0] * len(ERAS)
+    """대상의 시대를 두 가지 방법으로 따로 추정해, 둘이 같을 때만 확정합니다.
+    ① 대상 이름이 직접 나오는 사료 가운데 연대가 있는 기록이 가장 많은 시대
+    ② 사서의 시대(삼국사기→고대, 고려사→고려)·연표까지 근거로, 2건 이상 나오는 가장 이른 시대
+    → (확정된 시대 또는 None, 후보 시대들). 33개 대상 실측에서 둘이 같을 때는 틀린 적이 없어
+    확실하지 않으면 점수를 건드리지 않고 사용자가 고르게 합니다."""
+    first = collections.Counter()
+    second = collections.Counter()
     for r in rows:
+        if not _direct(r):
+            continue
         a = r['analysis']
+        kind = other_kind(r)
         y = a.get('year')
-        if not y or a['score'] < 60 or other_kind(r):
-            continue
-        if not any('직접명칭' in x for x in a.get('score_reasons', [])):
-            continue
-        try:
-            counts[era_of(y)] += 1
-        except (TypeError, ValueError):
-            continue
-    best = max(range(len(ERAS)), key=lambda i: counts[i])
-    return best if counts[best] >= 3 else None
+        if y and not kind and a['score'] >= 60:
+            try:
+                first[era_of(y)] += 1
+            except (TypeError, ValueError):
+                pass
+        if not kind or '연표' in str(r.get('source') or ''):
+            e = era_hint(r)
+            if e is not None:
+                second[e] += 1
+    one = first.most_common(1)[0][0] if first and first.most_common(1)[0][1] >= 3 else None
+    two = next((e for e in sorted(second) if second[e] >= 2), None)
+    candidates = sorted({e for e in (one, two) if e is not None})
+    return (one if one is not None and one == two else None), candidates
 
 
 def apply_era(rows, era):
@@ -103,3 +125,22 @@ def apply_era(rows, era):
             a.setdefault('score_reasons', []).append(
                 ('대상과 이웃한 시대의 기록' if d == 1 else '대상과 다른 시대의 기록') + f' -{cut}')
             a['era_adjusted'] = True
+
+
+# 연대는 없지만 어느 시대의 사서인지로 시대를 알 수 있는 자료(사이트 ID 앞부분)
+KEY_ERAS = (('db:sg_', 0), ('db:sy_', 0), ('db:kr_', 1), ('db:kj_', 1))
+
+
+def era_hint(row):
+    """기록의 시대: 연대가 있으면 연대로, 없으면 어느 시대 사서인지(삼국사기→고대, 고려사→고려)로."""
+    y = (row.get('analysis') or {}).get('year')
+    if y:
+        try:
+            return era_of(y)
+        except (TypeError, ValueError):
+            pass
+    key = str(row.get('key') or '')
+    for prefix, era in KEY_ERAS:
+        if key.startswith(prefix):
+            return era
+    return None
