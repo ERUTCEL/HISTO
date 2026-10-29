@@ -1148,7 +1148,10 @@ class App(tk.Tk):
                                       'closed': False, 'lock': threading.Lock()}
                     # 요청 한도: 빠른 검색 기본(자료원 선택 시 20회)을 검색어 수만큼 늘립니다(이름이 여럿이면 모두 찾도록)
                     limit = (20 if sources else 12) * max(1, len(terms))
-                    cmd = [cmd + ['--quick', '--max-requests', str(limit)], ('merge', str(out)), ('select', str(out), PRIORITY_N), download]
+                    # 빠른 검색과 같은 범위(목록만·사이트마다 첫 쪽)지만 '--quick'은 쓰지 않습니다: '--quick'은 요청마다
+                    # 5~12초만 기다리고 재시도하지 않아, 결과가 많은 이름(송시열 등)은 한국사DB가 통째로 빠졌습니다.
+                    search = cmd + ['--search-only', '--max-pages', '1', '--max-requests', str(limit)]
+                    cmd = [search, ('merge', str(out)), ('select', str(out), PRIORITY_N), download]
                 else:
                     cmd = [('select', str(out), PRIORITY_N), download]
             else:
@@ -1183,7 +1186,7 @@ class App(tk.Tk):
         result = 0
         for i, step in enumerate(steps):
             # 앞 단계가 실패했거나 중단을 눌렀으면 다음 단계는 하지 않음(미리 받은 본문 합치기는 예외)
-            kind = step[0] if isinstance(step, tuple) else 'quick' if '--quick' in step else 'download'
+            kind = step[0] if isinstance(step, tuple) else 'quick' if ('--quick' in step or '--search-only' in step) else 'download'
             stopped = bool(self.stop_file and self.stop_file.exists())
             # 빠른 검색은 요청 한도(20회)에 닿으면 0이 아닌 값으로 끝나지만 목록은 저장돼 있으니 계속합니다.
             # 멈추는 경우: 중단을 눌렀을 때, 고르기 단계가 '고를 것 없음/받을 것 없음'을 알렸을 때, 목록이 아예 없을 때
