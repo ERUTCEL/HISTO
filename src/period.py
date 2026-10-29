@@ -48,3 +48,58 @@ def fill_year(row):
 
 def is_modern_press(row):
     return any(w in str(row.get('source') or '') for w in MODERN_WORDS)
+
+
+# ── 시대 가중치(연도가 아니라 큰 시대 단위) ─────────────────────────
+# 연도 거리로 재면 기록의 양·사후 기록에 휘둘리므로, 큰 시대가 같은지만 봅니다.
+ERAS = ('고대', '고려', '조선', '근대(대한제국)', '일제강점기', '현대')
+ERA_STARTS = (918, 1392, 1897, 1910, 1945)       # 각 시대가 시작하는 해(고려~현대)
+ERA_PENALTY = {0: 0, 1: 10}                        # 같은 시대 0 · 바로 이웃 시대 -10 · 그 밖 -30
+ERA_FAR_PENALTY = 30
+
+
+def era_of(year):
+    y = int(year)
+    i = 0
+    while i < len(ERA_STARTS) and y >= ERA_STARTS[i]:
+        i += 1
+    return i
+
+
+def target_era(rows, other_kind=lambda r: None):
+    """대상 이름이 직접 나오는 사료(연구 문헌·후대 서술 제외)가 가장 많은 시대. 근거가 3건 미만이면 None."""
+    counts = [0] * len(ERAS)
+    for r in rows:
+        a = r['analysis']
+        y = a.get('year')
+        if not y or a['score'] < 60 or other_kind(r):
+            continue
+        if not any('직접명칭' in x for x in a.get('score_reasons', [])):
+            continue
+        try:
+            counts[era_of(y)] += 1
+        except (TypeError, ValueError):
+            continue
+    best = max(range(len(ERAS)), key=lambda i: counts[i])
+    return best if counts[best] >= 3 else None
+
+
+def apply_era(rows, era):
+    """대상 시대와 다른 시대의 기록은 점수를 낮춥니다(근거 문구에 숫자 없음)."""
+    if era is None:
+        return
+    for r in rows:
+        a = r['analysis']
+        y = a.get('year')
+        if not y or a.get('era_adjusted'):
+            continue
+        try:
+            d = abs(era_of(y) - era)
+        except (TypeError, ValueError):
+            continue
+        cut = ERA_PENALTY.get(d, ERA_FAR_PENALTY)
+        if cut:
+            a['score'] -= cut
+            a.setdefault('score_reasons', []).append(
+                ('대상과 이웃한 시대의 기록' if d == 1 else '대상과 다른 시대의 기록') + f' -{cut}')
+            a['era_adjusted'] = True

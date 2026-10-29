@@ -170,6 +170,12 @@ def read_results(folder, profile=None):
         period.fill_year(row)   # 연대가 비어 있으면 사이트 번호에서 읽어 채움(표시용, 점수에는 쓰지 않음)
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
                                     str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
+    # 시대 가중치: 대상의 큰 시대(고대·고려·조선·근대·일제강점기·현대)와 다른 시대의 기록은 낮춤.
+    # 대상 시대는 직접 고른 값(설정 '대상 시대')이 있으면 그것, 없으면 자동(직접 언급 사료의 최빈 시대)
+    choice = profile.get('era_choice')
+    era = period.ERAS.index(choice) if choice in period.ERAS else period.target_era(rows, secondary_kind)
+    period.apply_era(rows, era)
+    profile = dict(profile, _era=era, _era_auto=choice not in period.ERAS)
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
     return rows, profile
 
@@ -426,6 +432,12 @@ class ResultsWindow(tk.Toplevel):
         ttk.Button(buttons, text='비슷한 문헌', style='Large.TButton', cursor='hand2',
                    command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='텍스트 분석', style='Outline.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+        # 대상 시대: 자동(직접 언급 사료가 가장 많은 시대) 또는 직접 고르기 → 다른 시대 기록은 점수를 낮춤
+        self.era_choice = tk.StringVar(value='자동')
+        era_box = ttk.Combobox(buttons, textvariable=self.era_choice, state='readonly', width=12, values=['자동'] + list(period.ERAS))
+        era_box.pack(side='right')
+        tk.Label(buttons, text='대상 시대', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='right', padx=(0, px(6)))
+        era_box.bind('<<ComboboxSelected>>', lambda e: self._set_era())
 
 
         split = ttk.Panedwindow(self, orient='horizontal')
@@ -548,6 +560,7 @@ class ResultsWindow(tk.Toplevel):
             threading.Thread(target=lambda: hanja_input.learn_pairs(rows_for_hanja), daemon=True).start()
             self._struct = {}
             self._load_priority()
+            self.era_choice.set(self.profile.get('era_choice') if self.profile.get('era_choice') in period.ERAS else '자동')
         except Exception as exc:
             self.rows, self.filtered, self.shown = [], [], {}
             children = self.tree.get_children()
@@ -580,6 +593,23 @@ class ResultsWindow(tk.Toplevel):
             self.priority_check.pack(side='left', padx=(px(10), 0), before=self.priority_anchor)
         else:
             self.priority_check.pack_forget()
+
+    def _set_era(self):
+        """고른 대상 시대를 이 결과 폴더 설정에 저장하고 다시 계산합니다."""
+        choice = self.era_choice.get()
+        path = self.folder / 'active_profile.json'
+        try:
+            data = json.loads(path.read_text(encoding='utf-8')) if path.exists() else dict(self.profile or {})
+            data = {k: v for k, v in data.items() if not k.startswith('_')}
+            if choice in period.ERAS:
+                data['era_choice'] = choice
+            else:
+                data.pop('era_choice', None)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        except (OSError, ValueError) as exc:
+            messagebox.showerror('대상 시대', str(exc), parent=self)
+            return
+        self.reload()
 
     def schedule_filter(self, *args):
         if self._timer:
@@ -632,6 +662,9 @@ class ResultsWindow(tk.Toplevel):
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         prio = (f'  ·  우선 본문: 관련성 높은 {len(self.priority_keys)}건만 보는 중' if self.priority_keys and self.only_priority.get() else '')
+        era = (self.profile or {}).get('_era')
+        if era is not None:
+            prio += f"  ·  대상 시대: {period.ERAS[era]}{'(자동)' if (self.profile or {}).get('_era_auto') else ''}"
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))
