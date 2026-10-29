@@ -90,7 +90,7 @@ def _terms_regex(terms):
 # 사료가 아닌 연구·해설 문헌(논문 목록·학술지·개설서·연표·해설). 이름이 제목·목차에 몰려 있어
 # 점수가 사료보다 높게 나오기 쉬우므로 낮춥니다(목록에서 지우지는 않음).
 SECONDARY_SOURCES = {'한국사연구휘보', '국사관논총', '한국사', '신편 한국사', '한국사론', '주제별연표', '우리역사넷',
-                     '수집사료해제집'}
+                     '수집사료해제집', '학술회의총서', '재외동포사총서', '한국고문서입문'}
 SECONDARY_WORDS = ('휘보', '논총', '논저', '해제', '연표', '학술지', 'KCI', '학위논문')   # 자료집·제공처 이름에 들어가면 연구 문헌
 SECONDARY_HOSTS = ('kci.go.kr', 'riss.kr', 'dbpia.co.kr', 'kiss.kstudy.com')
 SECONDARY_PENALTY = 60
@@ -98,7 +98,7 @@ SECONDARY_PENALTY = 60
 
 def is_secondary(row):
     source = str(row.get('source') or '')
-    if source in SECONDARY_SOURCES or str(row.get('key') or '').startswith(('db:hb_', 'db:nh_')):
+    if source in SECONDARY_SOURCES or str(row.get('key') or '').startswith(('db:hb_', 'db:nh_', 'db:hhcs_', 'db:oksr_')):
         return True
     # 한국학자료통합플랫폼처럼 여러 기관을 모은 곳은 제공처(path)·주소로 논문을 가려냅니다
     where = source + ' ' + str(row.get('path') or '')
@@ -624,7 +624,7 @@ class ResultsWindow(tk.Toplevel):
         keep = {r.get('key') for r in self.selected()}  # 새로고침·필터 후에도 보던 문헌 선택 유지
         query = self.query.get().casefold().strip()
         minimum = {'전체 후보': -10000, '60점 이상': 60, '80점 이상': 80}[self.threshold.get()]
-        facet, period, source = self.facet.get(), self.period.get(), self.source_filter.get()
+        facet, decade, source = self.facet.get(), self.period.get(), self.source_filter.get()
         wanted = None
         if source != '모든 자료원':
             wanted = next((s.id for s in BY_ID.values() if s.short == source), None)
@@ -643,7 +643,7 @@ class ResultsWindow(tk.Toplevel):
                     continue
                 if facet != '미분류' and facet not in topics:
                     continue
-            if period != '모든 연대' and a['period'] != period:
+            if decade != '모든 연대' and a['period'] != decade:
                 continue
             if query and query not in row.get('_search', ''):
                 continue
