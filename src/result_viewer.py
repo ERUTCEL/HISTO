@@ -86,6 +86,24 @@ def _terms_regex(terms):
     return re.compile('|'.join(pats)) if pats else None
 
 
+# 사료가 아닌 연구·해설 문헌(논문 목록·학술지·개설서·연표·해설). 이름이 제목·목차에 몰려 있어
+# 점수가 사료보다 높게 나오기 쉬우므로 낮춥니다(목록에서 지우지는 않음).
+SECONDARY_SOURCES = {'한국사연구휘보', '국사관논총', '한국사', '주제별연표', '우리역사넷'}
+SECONDARY_PENALTY = 60
+
+
+def is_secondary(row):
+    return str(row.get('source') or '') in SECONDARY_SOURCES or str(row.get('key') or '').startswith('db:hb_')
+
+
+def _mark_secondary(row):
+    a = row['analysis']
+    if is_secondary(row) and not a.get('secondary'):
+        a['secondary'] = True
+        a['score'] = a['score'] - SECONDARY_PENALTY
+        a.setdefault('score_reasons', []).append(f'연구·해설 문헌(사료 아님) -{SECONDARY_PENALTY}')
+
+
 SORTS = ('추천순', '판정 필요순')
 OLD_SORTS = {'학습 추천순': '추천순', '기본 점수순': '추천순'}   # 예전 설정 이름
 
@@ -112,6 +130,7 @@ def read_results(folder, profile=None):
         raise FileNotFoundError('이 폴더에 collection.sqlite3 또는 documents.jsonl이 없습니다. 기존 수집결과 폴더를 선택하세요.')
     for row in rows:
         row['analysis'] = analyze(row, profile)
+        _mark_secondary(row)
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
                                     str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
@@ -1147,6 +1166,7 @@ class ResultsWindow(tk.Toplevel):
         parts += [
             (f" {', '.join(sorted(self._topics_of(row))) or '미분류'} ", 'chip2'), ('  ', None),
             (f" {a['year'] or '연대 미상'} ", 'chip2'), ('  ', None),
+            *([(' 연구·해설 문헌 ', 'chip2'), ('  ', None)] if a.get('secondary') else []),
             (f" {status} ", 'chip2'), ('\n', 'meta'),
             (row.get('title', '(제목 없음)') + '\n', 'title'),
             (row.get('source', '') + '\n', 'meta'),
