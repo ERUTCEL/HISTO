@@ -1242,7 +1242,7 @@ class App(tk.Tk):
             # (뒤에 더 나은 문헌이 들어와 밀려날 수 있으니 조금씩 받아 헛수고를 줄입니다)
             budget = min(PREFETCH_BATCH, PRIORITY_N - len(pf['done']))
             top = _unique_articles(sorted((r for r in rows if r['analysis']['score'] > 0),
-                                          key=lambda r: (-r['analysis']['score'], _year(r),
+                                          key=lambda r: (-r['analysis']['score'],
                                                          0 if r.get('key') in pf['done'] else _body_tier(r),
                                                          str(r.get('key')))), PRIORITY_N)
             done_articles = {_same_article(k) for k in pf['done']}
@@ -1324,10 +1324,9 @@ class App(tk.Tk):
         본문을 받을 수 있는 것만 다음 단계로 넘기고, 고른 목록은 결과 창이 그 문헌만 보여 주도록 남깁니다."""
         from result_viewer import read_results
         rows, _ = read_results(out)
-        # 점수가 같으면 당대에 가까운(오래된) 기록부터, 같은 연대 안에서는
-        # ① 본문을 이미 받은 것 ② 본문을 받을 수 있는 것 ③ 서지·요약만 있는 것 순서
+        # 점수가 같으면 ① 본문을 이미 받은 것 ② 본문을 받을 수 있는 것 ③ 서지·요약만 있는 것 순서
         ranked = _unique_articles(sorted((r for r in rows if r['analysis']['score'] > 0),
-                                         key=lambda r: (-r['analysis']['score'], _year(r), _body_tier(r), str(r.get('key')))), n)
+                                         key=lambda r: (-r['analysis']['score'], _body_tier(r), str(r.get('key')))), n)
         keys = [r.get('key') for r in ranked]
         fetch = [r.get('key') for r in ranked if r.get('download_supported', True) and not r.get('body')]
         (out / 'selected_keys.json').write_text(json.dumps(fetch, ensure_ascii=False), encoding='utf-8')

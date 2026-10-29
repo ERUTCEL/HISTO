@@ -105,12 +105,39 @@ def is_secondary(row):
     return any(w in where for w in SECONDARY_WORDS) or any(h in str(row.get('url') or '') for h in SECONDARY_HOSTS)
 
 
+# 문예·후대 서술: 시간이 아니라 '기록의 종류'로 봅니다. 사이트가 붙인 기사 형식(소설·문예·기고·논설·기행…)과
+# 제목의 史話·秘話·哀史 같은 말. 근현대 신문·잡지라도 '일반기사(보도)'는 그 시대의 사료로 그대로 둡니다.
+PRESS_WORDS = ('신문', '일보', '신보', '잡지', '매일')
+LITERARY_GENRES = ('소설', '문예', '문학', '기고', '해설·주장', '논설', '기행', '회고', '수필', '야담', '평론')
+LITERARY_TITLES = ('史話', '사화)', '秘話', '비화', '哀史', '애사', '소설', '연재', '野談', '야담')
+
+
+def is_later_narrative(row):
+    """문예·야사·평론처럼 '후대에 이야기로 쓴' 기록인가(시간과 무관, 기록 종류로 판단)."""
+    title = str(row.get('title') or '')
+    if any(w in title for w in LITERARY_TITLES):
+        return True
+    source = str(row.get('source') or '')
+    press = source == '근현대잡지자료' or any(w in source for w in PRESS_WORDS)
+    genre = str(row.get('path') or '')   # 사이트가 붙인 기사 형식·분류(예: '기사형식 | 문예, 학술', '기사형태 | 기행문')
+    return press and any(g in genre for g in LITERARY_GENRES)
+
+
+def secondary_kind(row):
+    if is_secondary(row):
+        return '연구·해설 문헌'
+    if is_later_narrative(row):
+        return '문예·후대 서술'
+    return None
+
+
 def _mark_secondary(row):
     a = row['analysis']
-    if is_secondary(row) and not a.get('secondary'):
-        a['secondary'] = True
+    kind = secondary_kind(row)
+    if kind and not a.get('secondary'):
+        a['secondary'] = kind
         a['score'] = a['score'] - SECONDARY_PENALTY
-        a.setdefault('score_reasons', []).append(f'연구·해설 문헌(사료 아님) -{SECONDARY_PENALTY}')
+        a.setdefault('score_reasons', []).append(f'{kind}(사료 아님) -{SECONDARY_PENALTY}')
 
 
 SORTS = ('추천순', '판정 필요순')
@@ -140,13 +167,9 @@ def read_results(folder, profile=None):
     for row in rows:
         row['analysis'] = analyze(row, profile)
         _mark_secondary(row)
-        period.fill_year(row)
+        period.fill_year(row)   # 연대가 비어 있으면 사이트 번호에서 읽어 채움(표시용, 점수에는 쓰지 않음)
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
                                     str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
-    # 시기 가중치: 대상이 활동한 시기를 추정해 한참 뒤·앞의 기록은 점수를 낮춤
-    era = period.estimate(rows, is_secondary)
-    period.apply(rows, era)
-    profile = dict(profile, _era=era)
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
     return rows, profile
 
@@ -609,8 +632,6 @@ class ResultsWindow(tk.Toplevel):
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         prio = (f'  ·  우선 본문: 관련성 높은 {len(self.priority_keys)}건만 보는 중' if self.priority_keys and self.only_priority.get() else '')
-        era = (self.profile or {}).get('_era')
-        prio += f'  ·  대상 시기: {era[0]}~{era[1]}년(자동 추정)' if era else ''
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))
@@ -1182,7 +1203,7 @@ class ResultsWindow(tk.Toplevel):
         parts += [
             (f" {', '.join(sorted(self._topics_of(row))) or '미분류'} ", 'chip2'), ('  ', None),
             (f" {a['year'] or '연대 미상'} ", 'chip2'), ('  ', None),
-            *([(' 연구·해설 문헌 ', 'chip2'), ('  ', None)] if a.get('secondary') else []),
+            *([(f" {a['secondary'] if isinstance(a.get('secondary'), str) else '연구·해설 문헌'} ", 'chip2'), ('  ', None)] if a.get('secondary') else []),
             (f" {status} ", 'chip2'), ('\n', 'meta'),
             (row.get('title', '(제목 없음)') + '\n', 'title'),
             (row.get('source', '') + '\n', 'meta'),
