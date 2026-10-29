@@ -22,6 +22,7 @@ import textlab as tl
 import mtl
 import bookmarks as bm
 import reader
+import period
 import history_fields as hf
 import settings
 import hanja_input
@@ -139,8 +140,13 @@ def read_results(folder, profile=None):
     for row in rows:
         row['analysis'] = analyze(row, profile)
         _mark_secondary(row)
+        period.fill_year(row)
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
                                     str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
+    # 시기 가중치: 대상이 활동한 시기를 추정해 한참 뒤·앞의 기록은 점수를 낮춤
+    era = period.estimate(rows, is_secondary)
+    period.apply(rows, era)
+    profile = dict(profile, _era=era)
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
     return rows, profile
 
@@ -603,6 +609,8 @@ class ResultsWindow(tk.Toplevel):
                                      STATUS.get(row.get('status'), row.get('status', ''))))
         counts = Counter(name for row in self.filtered for name in row['analysis']['facets'])
         prio = (f'  ·  우선 본문: 관련성 높은 {len(self.priority_keys)}건만 보는 중' if self.priority_keys and self.only_priority.get() else '')
+        era = (self.profile or {}).get('_era')
+        prio += f'  ·  대상 시기: {era[0]}~{era[1]}년(자동 추정)' if era else ''
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))
