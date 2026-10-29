@@ -51,7 +51,7 @@ def paragraphs_from_flat(text, hanja=False):
     """한 줄로 합쳐진 글 → 문단 목록. '○'에서 새 문단, 그 밖에는 문장 몇 개씩 묶습니다."""
     size = 110 if hanja else 170
     out = []
-    for chunk in re.split(r'\s*(?=○)', text):
+    for chunk in re.split(r'\s*(?=○)|\s*(?=【(?:태백산|정족산|오대산|적상산|국편|분류))|\s*(?=ⓒ)', text):
         chunk = chunk.strip()
         if not chunk:
             continue
@@ -75,6 +75,27 @@ def split_notes(text):
     return body, [n.strip() for n in re.split(r'(?=\[註\s*\d+\])', tail) if n.strip()]
 
 
+def _norm_remark(text):
+    """한국사DB 주석 칸의 '註) 001 낱말 ： 풀이' → '[註 001] 낱말 ： 풀이'."""
+    return re.sub(r'註\)\s*(\d+)', r'[註 \1]', text)
+
+
+def _norm_inline(text, notes):
+    """본문만 저장된 경우(원문 페이지 없음)의 주석 표시 정리.
+    - 한국사DB: '註001) 註 001) 풀이…' → '[註 001]' (풀이는 주석 칸에 있음)
+    - 실록: ' 422) ' → ' [註 422] ' (그 번호의 풀이가 있을 때만)"""
+    nums = {re.sub(r'\D', '', MARK.match(n).group()) for n in notes if MARK.match(n)}
+    for n in notes:
+        m = re.match(r'\[註\s*(\d+)\]\s*(.*)', n)
+        if m:
+            pat = r'註\s*' + m.group(1) + r'\)\s*註\s*' + m.group(1) + r'\)\s*' + r'\s*'.join(re.escape(c) for c in m.group(2).replace(' ', ''))
+            text = re.sub(pat, f'[註 {m.group(1)}]', text)
+    text = re.sub(r'註\s*(\d+)\)\s*(?:註\s*\1\))?', r'[註 \1]', text)
+    if nums:
+        text = re.sub(r'(?<=\S)\s*(\d{1,4})\)(?=\s)', lambda m: f' [註 {m.group(1)}]' if m.group(1) in nums else m.group(0), text)
+    return text
+
+
 def note_items(text):
     """'주석' 칸의 글 → 낱말 풀이 하나씩."""
     if MARK.search(text):
@@ -92,6 +113,20 @@ def _clean_lines(text):
 def _html_paragraphs(node):
     """HTML 요소 → (문단들, 따로 떨어진 주석들)."""
     notes = []
+    # 한국사DB(비변사등록 등): 본문 속 '註001)' 말풍선 → [註 001] 표시만 남기고 풀이는 아래 주석으로
+    for pop in node.select('span.popup-type1'):
+        sup = pop.find('sup')
+        num = re.sub(r'\D', '', sup.get_text()) if sup else ''
+        cont = pop.select_one('.cont')
+        if num:
+            if cont is not None:
+                notes.append(f'[註 {num}] ' + ' '.join(cont.get_text(' ').split()))
+            pop.replace_with(f'[註 {num}]')
+    # 실록·승정원일기: 낱말 뒤 '422)' 위첨자 → [註 422]
+    for sup in node.select('a.footnote_super sup, sup'):
+        num = re.fullmatch(r'\s*(\d{1,4})\)\s*', sup.get_text() or '')
+        if num:
+            sup.replace_with(f'[註 {num.group(1)}]')
     found = [el for el in node.find_all(('ul', 'ol', 'dl', 'div', 'p', 'table'))
              if any(w in ' '.join(el.get('class') or []).lower() for w in ('footnote', 'remark'))]
     for el in found:
@@ -147,8 +182,8 @@ def _from_html(row, folder):
         paras, notes = _html_paragraphs(body)
         sections.append({'label': '본문', 'paras': paras, 'notes': notes})
         remark = doc.select_one('#section-remark')
-        if remark is not None:
-            sections.append({'label': '주석', 'paras': [], 'notes': note_items(' '.join(_clean_lines(remark.get_text('\n'))))})
+        if remark is not None and not notes:   # 본문 말풍선에서 이미 풀이를 모았으면 겹치지 않게 생략
+            sections.append({'label': '주석', 'paras': [], 'notes': note_items(_norm_remark(' '.join(_clean_lines(remark.get_text('\n')))))})
     return sections if any(s['paras'] or s['notes'] for s in sections) else None
 
 
@@ -165,16 +200,24 @@ def _from_text(row):
                 raw[-1] = (raw[-1][0], raw[-1][1] + '\n' + chunk)
             else:
                 raw.append(('본문', chunk))
+    # 주석 칸·본문 끝의 풀이를 먼저 모아 두고, 본문 속 주석 표시를 [註 n]으로 맞춥니다
+    remark_notes = []
+    for label, text in raw:
+        if label == '주석':
+            remark_notes += note_items(_norm_remark(' '.join(text.split())))
     sections = []
     for label, text in raw:
         if label == '주석':
-            sections.append({'label': '주석', 'paras': [], 'notes': note_items(' '.join(text.split()))})
+            sections.append({'label': '주석', 'paras': [], 'notes': remark_notes})
+            remark_notes = []
             continue
         lines = _clean_lines(text)
         body, notes = split_notes(' '.join(lines))
+        all_notes = notes + [n for sec in raw if sec[0] == '주석' for n in note_items(_norm_remark(' '.join(sec[1].split())))]
         if len(lines) > 1 and not notes:      # 줄바꿈이 남아 있으면 그대로 문단으로
-            paras = lines
+            paras = [_norm_inline(ln, all_notes) for ln in lines]
         else:
+            body = _norm_inline(body, all_notes)
             paras = paragraphs_from_flat(body, is_hanja(body))
         sections.append({'label': label, 'paras': paras, 'notes': notes})
     return sections

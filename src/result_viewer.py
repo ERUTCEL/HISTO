@@ -1079,6 +1079,9 @@ class ResultsWindow(tk.Toplevel):
             else:
                 parts.append((sec['label'] + '\n', 'head'))
             for p in sec['paras']:
+                if p.lstrip().startswith(('【', 'ⓒ')):   # 실록 출처 정보(사고본·영인본·분류)는 작고 흐리게
+                    parts += self._para_parts(p, ('meta', 'para'))
+                    continue
                 parts += self._para_parts(p, ('body', 'para') + (('hanja_t',) if sec['hanja'] else ()))
         notes = doc['notes']
         if notes:

@@ -1120,7 +1120,10 @@ class App(tk.Tk):
         for i, step in enumerate(steps):
             # 앞 단계가 실패했거나 중단을 눌렀으면 다음 단계는 하지 않음(미리 받은 본문 합치기는 예외)
             kind = step[0] if isinstance(step, tuple) else 'quick' if '--quick' in step else 'download'
-            if i and kind != 'merge' and (result not in (0, None) or (self.stop_file and self.stop_file.exists())):
+            stopped = bool(self.stop_file and self.stop_file.exists())
+            # 빠른 검색은 요청 한도(20회)에 닿으면 0이 아닌 값으로 끝나지만 목록은 저장돼 있으니 계속합니다.
+            # 멈추는 경우: 중단을 눌렀을 때, 고르기 단계가 '고를 것 없음/받을 것 없음'을 알렸을 때, 목록이 아예 없을 때
+            if i and kind != 'merge' and (stopped or result == 'skip' or not self._has_results(Path(self.active_out))):
                 break
             if len(steps) > 1:
                 self.events.put(('log', f'── {i + 1}/{len(steps)} 단계: {labels[kind]} ──\n'))
@@ -1267,8 +1270,8 @@ class App(tk.Tk):
                                 + (f'남은 본문 {len(fetch)}건을 받습니다.\n' if fetch else '본문은 이미 모두 받았습니다.\n')))
         if not keys:
             self.events.put(('log', '고를 만한 후보가 없습니다. 검색어를 바꾸거나 빠른 검색으로 목록을 확인해 보세요.\n'))
-            return 1
-        return 0 if fetch else 2   # 받을 본문이 없으면 다음 단계 생략
+            return 'skip'
+        return 0 if fetch else 'skip'   # 받을 본문이 없으면 다음 단계 생략
 
     LOG_LIMIT = 4000  # 진행 기록 창에 남길 최대 줄 수
 
