@@ -67,6 +67,38 @@ PAGES = (
 )
 
 
+def _same_article(key):
+    """같은 기사를 가리키는 키를 하나로: 실록은 국역(k…)·원문(w…) 탭이 같은 기사를 다른 ID로 줍니다."""
+    key = re.sub(r'^(sillok:)[kw]', r'\1', str(key or ''))
+    # 한국사DB는 원문(sk_013_…)·번역(sk_013r_…) 탭이 같은 기사를 다른 ID로 줍니다
+    return re.sub(r'^(db:[a-z]+_\d+)r_', r'\1_', key)
+
+
+def _unique_articles(rows, n):
+    """순서대로 보면서 같은 기사는 한 번만, 최대 n건."""
+    seen, out = set(), []
+    for r in rows:
+        k = _same_article(r.get('key'))
+        # 원문·국역 탭처럼 같은 자료집에 같은 제목·요약으로 두 번 잡힌 기록도 하나로
+        twin = (r.get('source'), re.sub(r'\s+', '', str(r.get('title') or '')), re.sub(r'\s+', '', str(r.get('snippet') or ''))[:40])
+        if k in seen or (len(twin[1]) >= 8 and twin in seen):
+            continue
+        seen.update((k, twin))
+        out.append(r)
+        if len(out) >= n:
+            break
+    return out
+
+
+def _year(row):
+    """기록 연대(모르면 맨 뒤)."""
+    y = (row.get('analysis') or {}).get('year')
+    try:
+        return int(y)
+    except (TypeError, ValueError):
+        return 9999
+
+
 def _body_tier(row):
     """0 본문 있음 · 1 본문을 받을 수 있음 · 2 서지·요약만(받을 수 없음)"""
     if row.get('body'):
@@ -1209,11 +1241,13 @@ class App(tk.Tk):
             # 지금까지 모인 후보 중 '현재 상위 30건' 안에 있고 100점 이상인 것만, 한 번에 최대 10건.
             # (뒤에 더 나은 문헌이 들어와 밀려날 수 있으니 조금씩 받아 헛수고를 줄입니다)
             budget = min(PREFETCH_BATCH, PRIORITY_N - len(pf['done']))
-            top = sorted((r for r in rows if r['analysis']['score'] > 0),
-                         key=lambda r: (-r['analysis']['score'], 0 if r.get('key') in pf['done'] else _body_tier(r),
-                                        str(r.get('key'))))[:PRIORITY_N]
+            top = _unique_articles(sorted((r for r in rows if r['analysis']['score'] > 0),
+                                          key=lambda r: (-r['analysis']['score'], _year(r),
+                                                         0 if r.get('key') in pf['done'] else _body_tier(r),
+                                                         str(r.get('key')))), PRIORITY_N)
+            done_articles = {_same_article(k) for k in pf['done']}
             picks = [r for r in top if r['analysis']['score'] >= PREFETCH_MIN and not r.get('body')
-                     and r.get('download_supported', True) and r.get('key') not in pf['done']][:budget]
+                     and r.get('download_supported', True) and _same_article(r.get('key')) not in done_articles][:budget]
             if not picks:
                 return
             keys = [r.get('key') for r in picks]
@@ -1290,9 +1324,10 @@ class App(tk.Tk):
         본문을 받을 수 있는 것만 다음 단계로 넘기고, 고른 목록은 결과 창이 그 문헌만 보여 주도록 남깁니다."""
         from result_viewer import read_results
         rows, _ = read_results(out)
-        # 점수가 같으면 ① 본문을 이미 받은 것 ② 본문을 받을 수 있는 것 ③ 서지·요약만 있는 것 순서
-        ranked = sorted((r for r in rows if r['analysis']['score'] > 0),
-                        key=lambda r: (-r['analysis']['score'], _body_tier(r), str(r.get('key'))))[:n]
+        # 점수가 같으면 당대에 가까운(오래된) 기록부터, 같은 연대 안에서는
+        # ① 본문을 이미 받은 것 ② 본문을 받을 수 있는 것 ③ 서지·요약만 있는 것 순서
+        ranked = _unique_articles(sorted((r for r in rows if r['analysis']['score'] > 0),
+                                         key=lambda r: (-r['analysis']['score'], _year(r), _body_tier(r), str(r.get('key')))), n)
         keys = [r.get('key') for r in ranked]
         fetch = [r.get('key') for r in ranked if r.get('download_supported', True) and not r.get('body')]
         (out / 'selected_keys.json').write_text(json.dumps(fetch, ensure_ascii=False), encoding='utf-8')
