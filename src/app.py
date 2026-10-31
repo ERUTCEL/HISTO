@@ -70,10 +70,18 @@ PAGES = (
 def _primary_groups_first(total_groups):
     """한국사DB 묶음 검색 순서: 사료 묶음을 먼저, 연구·해설 문헌 묶음(휘보·논총·개설서·연표…)은 맨 뒤로.
     수집기는 묶음을 차례로 검색하다 요청 한도에서 멈추므로, 한도를 사료에 먼저 씁니다.
-    연구 문헌도 빼지 않고 한도가 남으면 검색합니다. 사료끼리의 순서는 사이트 순서 그대로입니다."""
+    사료끼리는 '이 검색어로 찾은 건수가 많은 묶음'부터 검색합니다(김유신 → 삼국사기, 김육 → 비변사등록·실록).
+    사이트 순서(고대→고려→조선)를 따르면 조선 인물도 음만 같은 고대 기록에 한도를 먼저 쓰기 때문입니다.
+    연구 문헌도 빼지 않고 한도가 남으면 검색합니다."""
+    def hits(g):
+        try:
+            return int(g.get('total') or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def ordered(raw):
         groups = total_groups(raw)
-        return sorted(groups, key=lambda g: is_secondary({'source': g.get('name'), 'key': f"db:{g.get('item')}_"}))
+        return sorted(groups, key=lambda g: (is_secondary({'source': g.get('name'), 'key': f"db:{g.get('item')}_"}), -hits(g)))
     ordered.original = total_groups
     return ordered
 
