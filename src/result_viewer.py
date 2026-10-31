@@ -21,6 +21,7 @@ import ranker
 import textlab as tl
 import mtl
 import bookmarks as bm
+import aliases
 import reader
 import period
 import history_fields as hf
@@ -133,6 +134,30 @@ def secondary_kind(row):
     return None
 
 
+# 점수 엔진은 제목·요약만 봅니다. 그래서 이름이 본문에만 있는 기록은 0점('근거 부족')이 됩니다.
+# - 본문을 받았고 본문에 대상 이름이 나오면: 요약에 나온 것과 같게 +80
+# - 본문은 아직 없지만 사이트가 검색어로 찾아 준 기록이면: 이름이 본문 뒤쪽에 있는 것이므로 +30
+#   ('관련 없음'이 아니라 '요약으로는 확인 안 됨'. 요약·제목에 이름이 나온 기록 80~100점보다 아래)
+BODY_NAME_SCORE = 80
+BODY_HIT_SCORE = 30
+_NO_EVIDENCE = '검색 제목·요약에서 인물 관련 근거 부족'
+
+
+def _body_hit(row, names):
+    a = row['analysis']
+    reasons = a.get('score_reasons') or []
+    if a['score'] != 0 or not all(_NO_EVIDENCE in x for x in reasons):
+        return
+    body = re.sub(r'\s+', '', str(row.get('body') or ''))
+    name = next((n for n in names if n and n in body), None) if body else None
+    if name:
+        a['score'] = BODY_NAME_SCORE
+        a['score_reasons'] = [f'본문 직접명칭 +{BODY_NAME_SCORE}: {name}']
+    elif row.get('terms'):
+        a['score'] = BODY_HIT_SCORE
+        a['score_reasons'] = [f'사이트 검색에서 본문에 검색어가 나옴(요약에는 없음) +{BODY_HIT_SCORE}']
+
+
 def _mark_secondary(row):
     a = row['analysis']
     kind = secondary_kind(row)
@@ -167,8 +192,13 @@ def read_results(folder, profile=None):
         rows = [json.loads(line) for line in (folder / 'documents.jsonl').read_text(encoding='utf-8-sig').splitlines() if line.strip()]
     else:
         raise FileNotFoundError('이 폴더에 collection.sqlite3 또는 documents.jsonl이 없습니다. 기존 수집결과 폴더를 선택하세요.')
+    # 사료는 이름을 한자로 씁니다(宋時烈). 한글 이름만으로는 사료가 0점이 되므로, 문헌에서 음이 맞는 한자 표기를 찾아 더합니다.
+    profile = dict(profile)
+    hanja_found = aliases.add_hanja_aliases(profile, rows)
+    direct_names = [re.sub(r'\s+', '', x) for x in profile.get('direct_aliases') or []]
     for row in rows:
         row['analysis'] = analyze(row, profile)
+        _body_hit(row, direct_names)
         _mark_secondary(row)
         period.fill_year(row)   # 연대가 비어 있으면 사이트 번호에서 읽어 채움(표시용, 점수에는 쓰지 않음)
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
@@ -181,7 +211,7 @@ def read_results(folder, profile=None):
     else:
         era, candidates = period.target_era(rows, secondary_kind)   # 확실할 때만 시대가 정해짐
     period.apply_era(rows, era)
-    profile = dict(profile, _era=era, _era_auto=choice not in period.ERAS, _era_candidates=candidates)
+    profile = dict(profile, _era=era, _era_auto=choice not in period.ERAS, _era_candidates=candidates, _hanja_found=hanja_found)
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
     return rows, profile
 
@@ -675,6 +705,9 @@ class ResultsWindow(tk.Toplevel):
             cands = (self.profile or {}).get('_era_candidates') or []
             prio += ('  ·  대상 시대가 확실하지 않아 시대 가중치를 쓰지 않습니다'
                      + (f"(후보: {'·'.join(period.ERAS[c] for c in cands)}) — 오른쪽 '대상 시대'에서 고르세요" if cands else ''))
+        found = (self.profile or {}).get('_hanja_found') or []
+        if found:
+            prio += '  ·  사료의 한자 이름도 찾음: ' + ' · '.join(found)
         self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))

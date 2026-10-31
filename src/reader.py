@@ -11,7 +11,7 @@ import re
 LABELS = ('국역', '원문', '본문', '주석')
 MARK = re.compile(r'\[註\s*\d+\]')
 _NOTE_START = re.compile(r'\[註\s*\d+\][^\[\n]{0,60}?\s?:\s')
-_HANJA = re.compile(r'[㐀-鿿豈-﫿]')
+_HANJA = re.compile(r'[\u3400-\u9fff\uf900-\ufaff]')
 _HANGUL = re.compile(r'[가-힣]')
 _BLOCKS = ('p', 'div', 'li', 'tr', 'dd', 'dt', 'blockquote', 'table', 'ul', 'ol', 'dl',
            'h1', 'h2', 'h3', 'h4', 'h5', 'h6')
