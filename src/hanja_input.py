@@ -323,6 +323,13 @@ class HanjaPopup(tk.Toplevel):
             pass
 
 
+def _lookup(widget):
+    import opendict   # 처음 쓸 때만 불러옵니다
+    rng = _word_range(widget)
+    if rng:
+        opendict.show(widget, rng[2])
+
+
 def _context_menu(event):
     w = event.widget
     try:
@@ -336,6 +343,7 @@ def _context_menu(event):
     menu.add_command(label='붙여넣기', command=lambda: w.event_generate('<<Paste>>'))
     menu.add_separator()
     menu.add_command(label='한자로 바꾸기  (F9)', command=lambda: convert(w))
+    menu.add_command(label='우리말샘에서 뜻 찾기', command=lambda: _lookup(w))
     try:
         if not isinstance(w, tk.Text):
             w.icursor(f'@{event.x}')

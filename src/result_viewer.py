@@ -22,6 +22,7 @@ import textlab as tl
 import mtl
 import bookmarks as bm
 import aliases
+import opendict
 import reader
 import period
 import history_fields as hf
@@ -986,6 +987,7 @@ class ResultsWindow(tk.Toplevel):
         if has_sel:
             menu.add_separator()
             menu.add_command(label='복사', command=lambda: (self.clipboard_clear(), self.clipboard_append(self._selected_text())))
+            menu.add_command(label='우리말샘에서 뜻 찾기', command=lambda: opendict.show(self, self._selected_text()))
         menu.tk_popup(event.x_root, event.y_root)
 
     def _tree_menu(self, event):
