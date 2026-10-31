@@ -67,6 +67,28 @@ PAGES = (
 )
 
 
+# 우선 본문 검색에서 건너뛰는 자료원: 우리역사넷은 연구·해설 자료라(점수 -200) 30건에 들지 않으므로,
+# 그 요청 횟수를 사료 쪽에 씁니다. '검색 목록만'·'전체 수집'에서는 그대로 검색합니다.
+SKIP_IN_PRIORITY = ('ourhistory',)
+
+
+def _without_sources(cmd, skip):
+    """수집기 명령에서 자료원 몇 곳을 뺍니다(자료원을 따로 고르지 않았으면 기본 자동 수집 목록에서)."""
+    cmd = list(cmd)
+    if '--sources' in cmd:
+        i = cmd.index('--sources')
+        chosen = cmd[i + 1].split(',')
+    else:
+        i, chosen = None, list(AUTO_IDS)
+    kept = [x for x in chosen if x not in skip]
+    if not kept:
+        return cmd
+    if i is None:
+        return cmd + ['--sources', ','.join(kept)]
+    cmd[i + 1] = ','.join(kept)
+    return cmd
+
+
 def _primary_groups_first(total_groups):
     """한국사DB 묶음 검색 순서: 사료 묶음을 먼저, 연구·해설 문헌 묶음(휘보·논총·개설서·연표…)은 맨 뒤로.
     수집기는 묶음을 차례로 검색하다 요청 한도에서 멈추므로, 한도를 사료에 먼저 씁니다.
@@ -1173,7 +1195,7 @@ class App(tk.Tk):
                     limit = (20 if sources else 12) * max(1, len(terms))
                     # 빠른 검색과 같은 범위(목록만·사이트마다 첫 쪽)지만 '--quick'은 쓰지 않습니다: '--quick'은 요청마다
                     # 5~12초만 기다리고 재시도하지 않아, 결과가 많은 이름(송시열 등)은 한국사DB가 통째로 빠졌습니다.
-                    search = cmd + ['--search-only', '--max-pages', '1', '--max-requests', str(limit)]
+                    search = _without_sources(cmd, SKIP_IN_PRIORITY) + ['--search-only', '--max-pages', '1', '--max-requests', str(limit)]
                     cmd = [search, ('merge', str(out)), ('select', str(out), PRIORITY_N), download]
                 else:
                     cmd = [('select', str(out), PRIORITY_N), download]
