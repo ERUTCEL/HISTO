@@ -15,7 +15,7 @@ import traceback
 import sqlite3
 import collector
 from analysis_engine import default_profile, profile_for_target
-from result_viewer import ResultsWindow, RelationsWindow
+from result_viewer import ResultsWindow, RelationsWindow, is_secondary
 from source_connectors import SOURCES, BY_ID, AUTO_IDS
 from browser_links import open_web_url
 import ui_theme as ui
@@ -65,6 +65,21 @@ PAGES = (
     ('favorites', '즐겨찾기', '읽다가 남겨 둔 문헌과 발췌를 분류별로 모아 봅니다. 분류마다 파일로 저장되어 메모장·워드로도 열립니다.'),
     ('activity', '진행 기록', '자료원 응답과 수집 상태를 기록합니다. 첫 목록이 저장되면 결과 창에서 바로 확인하세요.'),
 )
+
+
+def _primary_groups_first(total_groups):
+    """한국사DB 묶음 검색 순서: 사료 묶음을 먼저, 연구·해설 문헌 묶음(휘보·논총·개설서·연표…)은 맨 뒤로.
+    수집기는 묶음을 차례로 검색하다 요청 한도에서 멈추므로, 한도를 사료에 먼저 씁니다.
+    연구 문헌도 빼지 않고 한도가 남으면 검색합니다. 사료끼리의 순서는 사이트 순서 그대로입니다."""
+    def ordered(raw):
+        groups = total_groups(raw)
+        return sorted(groups, key=lambda g: is_secondary({'source': g.get('name'), 'key': f"db:{g.get('item')}_"}))
+    ordered.original = total_groups
+    return ordered
+
+
+if not hasattr(collector.total_groups, 'original'):
+    collector.total_groups = _primary_groups_first(collector.total_groups)
 
 
 def _same_article(key):
