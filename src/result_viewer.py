@@ -93,7 +93,9 @@ SECONDARY_SOURCES = {'한국사연구휘보', '국사관논총', '한국사', '�
                      '수집사료해제집', '학술회의총서', '재외동포사총서', '한국고문서입문'}
 SECONDARY_WORDS = ('휘보', '논총', '논저', '해제', '연표', '학술지', 'KCI', '학위논문')   # 자료집·제공처 이름에 들어가면 연구 문헌
 SECONDARY_HOSTS = ('kci.go.kr', 'riss.kr', 'dbpia.co.kr', 'kiss.kstudy.com')
-SECONDARY_PENALTY = 60
+# 연구 문헌은 원래 점수가 높아도(최고 155점 정도) 항상 0점 아래로 내려가게 합니다 → 우선 본문 30건에 들지 않고 목록 맨 뒤로
+SECONDARY_PENALTY = 200
+LATER_PENALTY = 60   # 문예·후대 서술
 
 
 def is_secondary(row):
@@ -136,8 +138,9 @@ def _mark_secondary(row):
     kind = secondary_kind(row)
     if kind and not a.get('secondary'):
         a['secondary'] = kind
-        a['score'] = a['score'] - SECONDARY_PENALTY
-        a.setdefault('score_reasons', []).append(f'{kind}(사료 아님) -{SECONDARY_PENALTY}')
+        cut = SECONDARY_PENALTY if kind == '연구·해설 문헌' else LATER_PENALTY
+        a['score'] = a['score'] - cut
+        a.setdefault('score_reasons', []).append(f'{kind}(사료 아님) -{cut}')
 
 
 SORTS = ('추천순', '판정 필요순')
