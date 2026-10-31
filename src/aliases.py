@@ -75,7 +75,6 @@ def suggest(name):
 # 사료(실록·승정원일기·문집 원문)는 이름을 한자로 씁니다(宋時烈). 한글 이름만으로는 점수 엔진이
 # 이름을 찾지 못해 사료가 0점이 되므로, 모은 문헌의 제목·요약에서 '글자마다 음이 맞는' 한자 표기를 찾습니다.
 # 예: 송시열 → 宋(송)時(시)烈(렬/열). 두음법칙(렬↔열, 리↔이, 녀↔여) 때문에 첫소리 ㄴ·ㄹ·ㅇ은 같게 봅니다.
-_CJK = re.compile(r'[\u3400-\u9fff\uf900-\ufaff]')
 _by_sound = None
 
 
@@ -100,8 +99,17 @@ def _sound_index():
     return _by_sound
 
 
-def hanja_from_texts(name, texts, limit=2):
-    """한글 이름 → 문헌에 실제로 2번 이상 나온, 음이 글자마다 맞는 한자 표기(많이 나온 순)."""
+def hanja_from_texts(name, records, limit=3):
+    """한글 이름 → 문헌에 실제로 쓰인 한자 표기들(대표 표기 먼저).
+
+    records: [(제목, 요약)] — 같은 기록 안에서 한글 이름과 함께 나왔는지 보려고 기록 단위로 받습니다.
+    규칙(33개 대상의 후보 87개를 맞음/우연으로 나눠 본 결과에서 정함, 이름별 예외 없음):
+      1. 글자마다 음이 맞고, 2번 이상 나오고, 한글 이름과 '같은 기록 안에' 함께 나온 적이 있어야 합니다.
+         (국역 '송시열(宋時烈)'처럼. 卯晴·長報告·眼中近 같은 우연한 겹침은 한글 이름과 함께 나오지 않습니다)
+      2. 그중 가장 많이 나온 것이 대표 표기입니다.
+      3. 다른 표기는 대표 표기와 '한 글자만 다른' 이체자일 때만 받습니다(姜邯贊·姜邯賛, 全琫準·全奉準).
+         두 글자 이름은 한 글자가 이름의 절반이라 이체자를 받지 않습니다.
+    """
     syls = re.sub(r'\s+', '', name or '')
     if not 2 <= len(syls) <= 8 or not all('가' <= c <= '힣' for c in syls):
         return []
@@ -109,33 +117,33 @@ def hanja_from_texts(name, texts, limit=2):
     allowed = [index.get(_sound(c), set()) for c in syls]
     if not all(allowed):
         return []
-    n, found = len(syls), collections.Counter()
-    for text in texts:
-        s = re.sub(r'\s+', '', str(text or ''))
+    n = len(syls)
+    count, together = collections.Counter(), collections.Counter()
+    for parts in records:
+        s = '|'.join(re.sub(r'\s+', '', str(p or '')) for p in parts)
+        seen = set()
         for i in range(len(s) - n + 1):
             if s[i] in allowed[0] and all(s[i + j] in allowed[j] for j in range(1, n)):
-                found[s[i:i + n]] += 1
-    if not found:
+                count[s[i:i + n]] += 1
+                seen.add(s[i:i + n])
+        if syls in s:
+            together.update(seen)
+    ok = [h for h, c in count.most_common() if c >= 2 and together[h] >= 1]
+    if not ok:
         return []
-    top = found.most_common(1)[0][1]
-    if n == 2:   # 두 글자는 우연히 겹치는 말이 많아(묘청 → 卯晴 '묘시에 맑음') 가장 많이 나온 하나만
-        limit = 1
-    return [h for h, c in found.most_common(limit) if c >= 2 and c >= top * 0.2]
+    main = ok[0]
+    variants = [h for h in ok[1:] if n >= 3 and sum(a != b for a, b in zip(h, main)) == 1]
+    return [main] + variants[:limit - 1]
 
 
 def add_hanja_aliases(profile, rows):
     """프로필의 한글 직접 이름마다 문헌에서 찾은 한자 표기를 더합니다(이미 있으면 그대로). → 더한 표기 목록"""
     names = list(profile.get('direct_aliases') or [])
     have = {re.sub(r'\s+', '', x) for x in names}
-    texts = [' '.join(str(r.get(k) or '') for k in ('title', 'snippet')) for r in rows]
+    records = [(r.get('title'), r.get('snippet')) for r in rows]
     added = []
-    def has_hanja(name):   # 이미 같은 길이의 한자 표기가 있는 이름(장희빈 → 張禧嬪)은 건너뜀
-        n = len(re.sub(r'\s+', '', name))
-        return any(len(x) == n and all(_CJK.match(c) for c in x) for x in have)
     for name in names:
-        if has_hanja(name):
-            continue
-        for h in hanja_from_texts(name, texts):
+        for h in hanja_from_texts(name, records):
             if h not in have:
                 have.add(h)
                 added.append(h)
