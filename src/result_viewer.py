@@ -24,6 +24,7 @@ import bookmarks as bm
 import aliases
 import opendict
 import relation_types as rtypes
+import relations as relmap
 import reader
 import period
 import history_fields as hf
@@ -272,27 +273,14 @@ class RelationsWindow(tk.Toplevel):
         apply_theme(self)
         self.title('관계도 — 공동 등장, 관계 미확정')
         ui.fit_geometry(self, 1100, 860, 780, 620)
-        year_of = {r.get('key'): r['analysis'].get('year') for r in rows}
-        relations = [rel for row in rows for rel in row['analysis']['relations']]
-        counts = Counter(n for rel in relations for n in (rel['source'], rel['target']))
-        names = [name for name, _ in counts.most_common(12)]
-        grouped = {}
-        for rel in relations:
-            pair = tuple(sorted((rel['source'], rel['target'])))
-            if pair[0] != pair[1] and all(x in names for x in pair):
-                grouped.setdefault(pair, []).append(rel)
-        self.edges = sorted(grouped.items(), key=lambda item: -len(item[1]))[:30]
-        # 연결마다 관계 종류 후보(근거 문장의 단서 낱말 · relation_types 참고)
-        self.kinds = [rtypes.summarize(ev, a, b) for (a, b), ev in self.edges]
+        self._rows = rows
+        self._year_of = {r.get('key'): r['analysis'].get('year') for r in rows}
+        self._prof = getattr(parent, 'profile', None) or {}
         self.kind_vars = {k: tk.BooleanVar(value=True) for k in rtypes.NAMES}
-        self._names = names
-        self._counts = counts
-        self._year_of = year_of
         self._edge_ids = {}
         self._current = 0
-        # 가운데 = 연구 대상(이름이 점들 가운데 있으면), 아니면 가장 많이 나온 표현
-        aliases = {re.sub(r'\s+', '', x) for x in (getattr(parent, 'profile', None) or {}).get('direct_aliases') or []}
-        self._center = next((n for n in names if re.sub(r'\s+', '', n) in aliases), names[0] if names else None)
+        self._center = None
+        self._compute()
         self.style_var = tk.StringVar(value=settings.get('relations_style', 'center'))
         if self.style_var.get() not in {k for k, _, _ in self.STYLES}:
             self.style_var.set('center')
@@ -316,23 +304,9 @@ class RelationsWindow(tk.Toplevel):
             ui.tip(b, desc)
         self.bind('<Escape>', lambda e: self.go_back())
         self.bind('<Alt-Left>', lambda e: self.go_back())
-        legend = tk.Frame(inner, bg=CARD)
-        legend.pack(fill='x', pady=(px(10), 0))
-        tk.Label(legend, text='관계 종류', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
-        n_by = Counter(main for main, _ in self.kinds)
-        for k in rtypes.NAMES:
-            box = tk.Frame(legend, bg=CARD)
-            box.pack(side='left', padx=(0, px(12)))
-            tk.Label(box, text='●', bg=CARD, fg=rtypes.COLORS[k], font=ui.FONTS['body']).pack(side='left')
-            cb = ttk.Checkbutton(box, text=f'{k} {n_by.get(k, 0)}', variable=self.kind_vars[k], command=self._draw, cursor='hand2')
-            cb.pack(side='left')
-            ui.tip(cb, '근거 문장에 이 종류의 단서 낱말이 있는 연결입니다(후보). 끄면 지도에서 숨깁니다.' if k != rtypes.UNKNOWN
-                   else '단서 낱말이 없어 종류를 정하지 않은 연결(같은 문장에 함께 나옴).')
-        ui.info_icon(legend, '관계 종류는 근거 문장 속 단서 낱말로 정한 후보입니다.\n'
-                             '· 처벌·대립(賜死·유배·탄핵…)·의례·장소(사당·제사·시호…): 두 표현 가까이에 단서가 있으면\n'
-                             '· 명령·보고(전교·아뢰다·상소…): 단서가 두 이름 사이에 있고 두 이름이 가까울 때만\n'
-                             '· 부정(…하지 않음)은 빼고, 이름 속 글자·다른 말의 일부는 단서로 보지 않습니다.\n'
-                             '혈연·혼인·천거는 검증에서 맞는 비율이 낮아(70% 미만) 아직 표시하지 않습니다.', CARD).pack(side='left')
+        self.legend = tk.Frame(inner, bg=CARD)
+        self.legend.pack(fill='x', pady=(px(10), 0))
+        self._build_legend()
         ui.hline(head, LINE).pack(fill='x')
 
         body = tk.Frame(self, bg=BG)
@@ -346,9 +320,8 @@ class RelationsWindow(tk.Toplevel):
         pick = tk.Frame(body, bg=BG)
         pick.pack(fill='x', pady=(px(14), px(8)))
         tk.Label(pick, text='연결', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(10)))
-        self.edges_list = ttk.Combobox(pick, state='readonly',
-                                       values=[f'{a} ↔ {b} · {self.kinds[i][0]} · 근거 기록 {len(e)}건'
-                                               for i, ((a, b), e) in enumerate(self.edges)])
+        self.edges_list = ttk.Combobox(pick, state='readonly')
+        self._fill_edges_list()
         self.edges_list.pack(side='left', fill='x', expand=True)
         self.edges_list.bind('<<ComboboxSelected>>', lambda e: self.show_edge(self.edges_list.current()))
         box = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
@@ -362,6 +335,119 @@ class RelationsWindow(tk.Toplevel):
             self.show_edge(0)
         else:
             self.evidence.insert('1.0', '현재 문헌에서 근거를 갖춘 공동 등장 후보를 찾지 못했습니다.', 'note')
+
+    # ── 데이터: 연결 세기 · 숨기기 · 합치기 ─────────────────────
+    def _target_key(self):
+        return re.sub(r'\s+', '', self._prof.get('target') or '') or '_'
+
+    def _merges(self):
+        return dict((settings.get('relations_merges') or {}).get(self._target_key(), {}))
+
+    def _hidden(self):
+        return set(settings.get('relations_hidden') or [])
+
+    def _compute(self):
+        """연결을 문장 단위로 직접 세고(엔진은 기록마다 몇 개만 뽑아 많이 빠짐), 숨긴 점은 빼고, 합친 점은 하나로."""
+        relations = relmap.build(self._rows, self._prof.get('target'), self._prof.get('direct_aliases') or [],
+                                 merges=self._merges())
+        hidden = self._hidden()
+        relations = [r for r in relations if r['source'] not in hidden and r['target'] not in hidden]
+        counts = Counter(n for rel in relations for n in (rel['source'], rel['target']))
+        names = [name for name, _ in counts.most_common(12)]
+        grouped = {}
+        for rel in relations:
+            pair = tuple(sorted((rel['source'], rel['target'])))
+            if pair[0] != pair[1] and all(x in names for x in pair):
+                grouped.setdefault(pair, []).append(rel)
+        self.edges = sorted(grouped.items(), key=lambda item: -len(item[1]))[:30]
+        # 연결마다 관계 종류 후보(근거 문장의 단서 낱말 · relation_types 참고)
+        self.kinds = [rtypes.summarize(ev, a, b) for (a, b), ev in self.edges]
+        self._names, self._counts = names, counts
+        self._current = 0
+        target = self._prof.get('target')
+        if self._center not in names:
+            self._center = target if target in names else (names[0] if names else None)
+
+    def _build_legend(self):
+        for w in self.legend.winfo_children():
+            w.destroy()
+        legend = self.legend
+        tk.Label(legend, text='관계 종류', bg=CARD, fg=MUTED, font=ui.FONTS['small']).grid(row=0, column=0, sticky='nw', padx=(0, px(8)))
+        n_by = Counter()
+        for _, cnt in self.kinds:   # 종류별 근거 기록 수(연결 하나를 한 종류로 세지 않음)
+            n_by.update(cnt)
+        for k in rtypes.NAMES:
+            if not n_by.get(k) and k != rtypes.UNKNOWN:
+                continue   # 이 자료에 없는 종류는 범례에서도 뺌(깔끔하게)
+            box = tk.Frame(legend, bg=CARD)
+            slot = sum(1 for w in legend.winfo_children() if isinstance(w, tk.Frame)) - 1
+            box.grid(row=slot // 5, column=1 + slot % 5, sticky='w', padx=(0, px(12)))   # 한 줄에 5개씩
+            tk.Label(box, text='●', bg=CARD, fg=rtypes.COLORS[k], font=ui.FONTS['body']).pack(side='left')
+            cb = ttk.Checkbutton(box, text=f'{k} {n_by.get(k, 0)}건', variable=self.kind_vars[k], command=self._draw, cursor='hand2')
+            cb.pack(side='left')
+            ui.tip(cb, '근거 문장에 이 종류의 단서 낱말이 있는 연결입니다(후보). 끄면 지도에서 숨깁니다.' if k != rtypes.UNKNOWN
+                   else '단서 낱말이 없어 종류를 정하지 않은 연결(같은 문장에 함께 나옴).')
+        ui.info_icon(legend, '점을 오른쪽 클릭하면 숨기거나(도감·대신 같은 일반 낱말) 다른 점과 합칠 수 있습니다(원자·세자 → 경종).\n'
+                             '관계 종류는 근거 문장 속 단서 낱말로 정한 후보입니다(자세한 방법: 관계도_방법.md).\n'
+                             '· 사건형 — 처벌·대립, 군사·전쟁, 외교·사신, 의례·장소: 두 표현 가까이에 단서가 있으면\n'
+                             '· 두 사람형 — 명령·보고: 단서가 두 이름 사이에 있고 두 이름이 가까울 때\n'
+                             '· 어순 틀 — 혈연·가족(A의 아들 B / B는 A의 아들), 관직·임명(A를 B로 삼다)\n'
+                             '새 대상의 근거 문장을 읽어 70% 이상 맞은 종류만 표시합니다.', CARD).grid(row=0, column=6, sticky='w')
+        if self._hidden() or self._merges():
+            undo = tk.Label(legend, text='숨긴·합친 점 되돌리기', bg=CARD, fg=ACCENT, font=ui.FONTS['small'], cursor='hand2')
+            undo.grid(row=1, column=6, sticky='w')
+            undo.bind('<Button-1>', lambda e: self._reset_edits())
+            ui.tip(undo, '숨김: ' + (', '.join(sorted(self._hidden())) or '없음') + '\n합침: '
+                   + (', '.join(f'{a}→{b}' for a, b in self._merges().items()) or '없음'))
+
+    def _fill_edges_list(self):
+        self.edges_list.configure(values=[f'{a} ↔ {b} · {self.kinds[i][0]} · 근거 기록 {len(e)}건'
+                                          for i, ((a, b), e) in enumerate(self.edges)])
+
+    def _refresh(self):
+        self._compute()
+        self._build_legend()
+        self._fill_edges_list()
+        if self.edges:
+            self.show_edge(0)
+        else:
+            self.evidence.delete('1.0', 'end')
+            self._draw()
+
+    def _node_menu(self, event, name):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label=f"'{name}' 숨기기 (일반 낱말·잡음)", command=lambda: self._hide(name))
+        merge = tk.Menu(menu, tearoff=0)
+        for other in self._names:
+            if other != name:
+                merge.add_command(label=other, command=lambda o=other: self._merge(name, o))
+        menu.add_cascade(label=f"'{name}'을(를) 같은 대상으로 합치기 →", menu=merge)
+        if self.style_var.get() == 'center':
+            menu.add_command(label=f"'{name}'을(를) 가운데로", command=lambda: self._node_clicked(name))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _hide(self, name):
+        settings.save(relations_hidden=sorted(self._hidden() | {name}))
+        self._refresh()
+
+    def _merge(self, src, dst):
+        allm = dict(settings.get('relations_merges') or {})
+        mine = dict(allm.get(self._target_key(), {}))
+        mine[src] = dst
+        for k, v in list(mine.items()):   # 합친 대상이 다시 합쳐지면 끝까지 따라감
+            if v == src:
+                mine[k] = dst
+        allm[self._target_key()] = mine
+        settings.save(relations_merges=allm)
+        if self._center == src:
+            self._center = dst
+        self._refresh()
+
+    def _reset_edits(self):
+        allm = dict(settings.get('relations_merges') or {})
+        allm.pop(self._target_key(), None)
+        settings.save(relations_hidden=[], relations_merges=allm)
+        self._refresh()
 
     # ── 그리기 ──────────────────────────────────────────
     def _style_changed(self):
@@ -414,7 +500,7 @@ class RelationsWindow(tk.Toplevel):
         pos = {center: (cx, cy)}
         for i, n in enumerate(others):
             # 함께 나온 기록이 많을수록 가까이(없으면 바깥 테두리)
-            r = rmax * (0.35 + 0.65 * (1 - strength[n] / top)) if strength[n] else rmax
+            r = rmax * (0.55 + 0.45 * (1 - strength[n] / top)) if strength[n] else rmax
             ang = 2 * math.pi * i / max(1, len(others)) - math.pi / 2
             pos[n] = (cx + r * math.cos(ang) * (width / 2 - px(90)) / rmax, cy + r * math.sin(ang))
         return pos
@@ -459,19 +545,34 @@ class RelationsWindow(tk.Toplevel):
                 continue
             (x1, y1), (x2, y2) = pos[pair[0]], pos[pair[1]]
             tag = f'edge{index}'
-            base = max(1, min(px(1) + len(evidence) // 2, px(7)))
-            line = c.create_line(x1, y1, x2, y2, fill=rtypes.COLORS[self.kinds[index][0]],
-                                 width=base + (px(3) if index == self._current else 0),
-                                 dash=() if index == self._current or self.kinds[index][0] != rtypes.UNKNOWN else (4, 3),
-                                 tags=(tag,))
+            n = len(evidence)
+            base = max(px(2), min(px(1) + n // 4, px(8)))
+            width_ = base + (px(3) if index == self._current else 0)
+            # 선 = 회색 바탕 + 단서가 있는 기록의 비율만큼만 그 종류 색(가운데 쪽부터). 연결 전체를 한 종류로 칠하지 않음
+            line = c.create_line(x1, y1, x2, y2, fill='#7F8A96' if index == self._current else '#D3CCBF',
+                                 width=width_, tags=(tag,))
             self._edge_ids[index] = line
+            mx, my = (x1 * 0.42 + x2 * 0.58), (y1 * 0.42 + y2 * 0.58)
+            typed = sorted(((k, v) for k, v in self.kinds[index][1].items() if k != rtypes.UNKNOWN), key=lambda kv: -kv[1])
             if numbers:   # 선 위에 함께 나온 기록 수
-                mx, my = (x1 * 0.42 + x2 * 0.58), (y1 * 0.42 + y2 * 0.58)
-                t = c.create_text(mx, my, text=str(len(evidence)), fill=rtypes.COLORS[self.kinds[index][0]],
-                                  font=ui.FONTS['label_sm'], tags=(tag,))
+                t = c.create_text(mx, my, text=str(n), fill=INK, font=ui.FONTS['label_sm'], tags=(tag,))
                 bx = c.bbox(t)
                 c.tag_lower(c.create_oval(bx[0] - px(5), bx[1] - px(2), bx[2] + px(5), bx[3] + px(2), fill=CARD,
-                                          outline=rtypes.COLORS[self.kinds[index][0]], tags=(tag,)), t)
+                                          outline='#B9B1A2', tags=(tag,)), t)
+                bar_y = bx[3] + px(5)
+            else:
+                bar_y = my
+            if typed:   # 작은 비율 막대: 회색 = 단서 없음, 색 = 그 종류 단서가 있는 기록의 비율
+                bw, bh = px(40), px(6)
+                bx0 = mx - bw / 2
+                c.create_rectangle(bx0, bar_y, bx0 + bw, bar_y + bh, fill='#E6E1D7', outline='', tags=(tag,))
+                x_ = bx0
+                for kind, cnt in typed:
+                    w_ = max(px(2), bw * cnt / n)
+                    c.create_rectangle(x_, bar_y, min(bx0 + bw, x_ + w_), bar_y + bh, fill=rtypes.COLORS[kind], outline='', tags=(tag,))
+                    x_ += w_
+            c.tag_bind(tag, '<Motion>', lambda e, i=index: self._edge_hover(e, i))
+            c.tag_bind(tag, '<Leave>', lambda e: c.delete('tl_tip'), add='+')
             c.tag_bind(tag, '<Button-1>', lambda event, i=index: self.show_edge(i))
             c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
             c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
@@ -484,8 +585,24 @@ class RelationsWindow(tk.Toplevel):
                                width=2 + int(2 * self._counts[name] / top), tags=(tag,))
             c.create_text(x, y, text=name, fill='white' if hub else ACCENT, font=ui.FONTS['label_sm'], tags=(tag,))
             c.tag_bind(tag, '<Button-1>', lambda e, n=name: self._node_clicked(n))
+            c.tag_bind(tag, '<Button-3>', lambda e, n=name: self._node_menu(e, n))
             c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
             c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
+
+    def _edge_hover(self, event, index):
+        """선에 마우스를 올리면: 두 표현 · 전체 건수 · 종류별 건수와 비율."""
+        c = self.canvas
+        (a, b), ev = self.edges[index]
+        n = len(ev)
+        parts = [f'{k} {v}건({v * 100 // n}%)' for k, v in sorted(self.kinds[index][1].items(), key=lambda kv: -kv[1])]
+        c.delete('tl_tip')
+        t = c.create_text(event.x + px(12), event.y + px(12), anchor='nw', fill=INK, font=ui.FONTS['small'],
+                          text=f'{a} ↔ {b} · 함께 나온 기록 {n}건\n' + ' · '.join(parts), tags=('tl_tip',))
+        x1, y1, x2, y2 = c.bbox(t)
+        if x2 > c.winfo_width() - 4:
+            c.move(t, -(x2 - x1) - px(24), 0)
+            x1, y1, x2, y2 = c.bbox(t)
+        c.tag_raise(t, c.create_rectangle(x1 - px(6), y1 - px(4), x2 + px(6), y2 + px(4), fill='#FFFDF5', outline=INK, tags=('tl_tip',)))
 
     def _node_clicked(self, name):
         """표현을 누르면: 중심형이면 가운데로, 아니면 그 표현의 가장 굵은 연결을 보여 줌."""
@@ -520,12 +637,17 @@ class RelationsWindow(tk.Toplevel):
                 if idx is not None and not self._visible(idx):
                     idx, w = None, 0
                 shade = 0 if not w else 0.2 + 0.8 * w / top
-                fill = _blend('#FFFFFF', rtypes.COLORS[self.kinds[idx][0]], shade) if w else '#FAF8F3'
+                fill = _blend('#FFFFFF', ACCENT, shade) if w else '#FAF8F3'   # 진하기 = 건수(종류는 칸 모서리 점)
                 tag = f'cell{i}_{j}'
                 c.create_rectangle(x, y, x + cell, y + cell, fill=fill, outline=CARD, tags=(tag,))
                 if w:
                     c.create_text(x + cell / 2, y + cell / 2, text=str(w), fill='white' if shade > 0.55 else INK,
                                   font=ui.FONTS['label_sm'], tags=(tag,))
+                    main = self.kinds[idx][0]
+                    if main != rtypes.UNKNOWN:
+                        r_ = max(px(3), cell * 0.09)
+                        c.create_oval(x + px(3), y + px(3), x + px(3) + 2 * r_, y + px(3) + 2 * r_, fill=rtypes.COLORS[main],
+                                      outline=CARD, tags=(tag,))
                     c.tag_bind(tag, '<Button-1>', lambda e, k=idx: self.show_edge(k))
                     c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
                     c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
