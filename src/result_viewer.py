@@ -422,14 +422,14 @@ class ResultsWindow(tk.Toplevel):
             self.bind(key, self._focus_query)
         self.bind('<F5>', lambda e: self.reload())
         self.bind('<Alt-Left>', lambda e: self.go_back())
-        tk.Label(titles, textvariable=self.info, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
-                 justify='left').pack(anchor='w', pady=(px(3), 0))
-        tk.Label(titles, textvariable=self.learn_info, bg=CARD, fg=ACCENT, font=ui.FONTS['label_sm'], anchor='w',
-                 justify='left').pack(anchor='w', pady=(px(2), 0))
+        self.info_detail = ''
+        info_label = tk.Label(titles, textvariable=self.info, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
+                              justify='left', cursor='question_arrow')
+        info_label.pack(anchor='w', pady=(px(3), 0))
+        ui.tip(info_label, lambda: '\n'.join(x for x in (self.info_detail, self.learn_info.get()) if x))
         ttk.Button(head, text='저장한 검색 열기', command=self.choose_folder, cursor='hand2').pack(side='right', anchor='n')
         ttk.Button(head, text='이 검색 저장', style='Primary.TButton', command=self.save_search,
                    cursor='hand2').pack(side='right', anchor='n', padx=(0, px(8)))
-        ttk.Button(head, text='파일 폴더 열기', command=self.open_folder, cursor='hand2').pack(side='right', anchor='n', padx=(0, px(8)))
 
         controls = tk.Frame(top, bg=CARD)
         controls.pack(fill='x', padx=px(28), pady=(px(14), px(16)))
@@ -477,6 +477,7 @@ class ResultsWindow(tk.Toplevel):
         more = tk.Menu(self, tearoff=0)
         more.add_command(label='새로고침  (F5)', command=self.reload)
         more.add_command(label='원문 주소 복사', command=self.copy_url)
+        more.add_command(label='파일 폴더 열기', command=self.open_folder)
         more.add_command(label='관계 후보 지도', command=lambda: RelationsWindow(self, self.filtered))
         more.add_command(label='추천 성능 보기', command=lambda: PerformanceWindow(self))
         more_btn = ttk.Button(buttons, text='더 보기 ▾', style='Large.TButton', cursor='hand2')
@@ -503,7 +504,9 @@ class ResultsWindow(tk.Toplevel):
             self.tree.column(name, width=px(width), minwidth=px(40), stretch=name == 'title',
                              anchor='center' if name in centered else 'w')
         scroll = ttk.Scrollbar(upper, orient='vertical', command=self.tree.yview, style='Card.Vertical.TScrollbar')
-        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.configure(yscrollcommand=scroll.set,
+                            displaycolumns=('fav', 'rec', 'label', 'title', 'source', 'year'))   # 검색어·점수·관점·상태 열은 숨김(본문 위에 표시)
+        self.tree.column('title', width=px(360))
         scroll.pack(side='right', fill='y')
         self.tree.pack(side='left', fill='both', expand=True)
         self.tree.bind('<<TreeviewSelect>>', self.show_selected)
@@ -519,26 +522,38 @@ class ResultsWindow(tk.Toplevel):
         split.add(lower, weight=4)
         bar = tk.Frame(lower, bg=HEAD)
         bar.pack(side='top', fill='x')
-        ui.hline(lower, LINE).pack(side='top', fill='x')
-        tk.Label(bar, text='이 문헌은', bg=HEAD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(14), px(8)), pady=px(8))
-        ttk.Button(bar, text='✓ 관련 있음  1', style='Outline.TButton', command=lambda: self.judge(1), cursor='hand2').pack(side='left', pady=px(6))
-        ttk.Button(bar, text='✕ 관련 없음  0', command=lambda: self.judge(0), cursor='hand2').pack(side='left', padx=(px(6), 0), pady=px(6))
-        ttk.Button(bar, text='지우기', style='Quiet.TButton', command=lambda: self.judge(None), cursor='hand2').pack(side='left', padx=(px(2), 0))
-        fav = tk.Frame(lower, bg=HEAD)
-        fav.pack(side='top', fill='x')
-        self.fav_button = ttk.Button(fav, text='☆ 즐겨찾기', style='Quiet.TButton', command=self.toggle_favorite, cursor='hand2')
-        self.fav_button.pack(side='left', padx=(px(8), 0), pady=(0, px(4)))
-        ttk.Button(fav, text='❝ 선택 부분 저장', style='Quiet.TButton', command=self.save_selection, cursor='hand2').pack(side='left', pady=(0, px(4)))
-        tk.Label(fav, text='분류', bg=HEAD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(8), px(4)))
-        self.cat_box = ttk.Combobox(fav, textvariable=self.save_cat, state='readonly', width=12,
+        self._more_line = ui.hline(lower, LINE)
+        self._more_line.pack(side='top', fill='x')
+        self.more_open = tk.BooleanVar(value=bool(settings.get('viewer_more_open', False)))
+        self.more_toggle = ttk.Button(bar, style='Quiet.TButton', cursor='hand2', command=self._toggle_more)
+        self.more_toggle.pack(side='right', padx=(0, px(6)))
+        ui.tip(self.more_toggle, '주제·분류 표시와 즐겨찾기 분류 고르기를 펼칩니다.')
+        judge_yes = ttk.Button(bar, text='✓ 관련', style='Outline.TButton', command=lambda: self.judge(1), cursor='hand2')
+        judge_yes.pack(side='left', padx=(px(10), 0), pady=px(6))
+        judge_no = ttk.Button(bar, text='✕ 무관', style='Quiet.TButton', command=lambda: self.judge(0), cursor='hand2')
+        judge_no.pack(side='left', padx=(px(6), 0), pady=px(6))
+        ui.tip(judge_yes, '이 문헌은 연구 대상과 관련 있음 (키 1). 판정이 쌓이면 추천 순서가 내 판단을 배웁니다.')
+        ui.tip(judge_no, '이 문헌은 관련 없음 (키 0). 판정을 지우려면 Delete 키.')
+        self.fav_button = ttk.Button(bar, text='☆ 즐겨찾기', style='Quiet.TButton', command=self.toggle_favorite, cursor='hand2')
+        self.fav_button.pack(side='left', padx=(px(10), 0))
+        ui.tip(self.fav_button, lambda: f"이 문헌을 즐겨찾기 '{self.save_cat.get()}' 분류에 저장 (F). 분류는 '분류 ▸'에서 바꿉니다.")
+        excerpt = ttk.Button(bar, text='❝ 발췌', style='Quiet.TButton', command=self.save_selection, cursor='hand2')
+        excerpt.pack(side='left')
+        ui.tip(excerpt, '본문에서 끌어 고른 부분만 즐겨찾기에 저장 (Ctrl+S)')
+        tk.Label(bar, textvariable=self.bm_msg, bg=HEAD, fg=OK_INK, font=ui.FONTS['label_sm']).pack(side='left', padx=px(8))
+        # 펼치면 보이는 칸: 즐겨찾기 분류 · 주제/분류 표시
+        self.more_panel = tk.Frame(lower, bg=HEAD)
+        fav = tk.Frame(self.more_panel, bg=HEAD)
+        fav.pack(side='top', fill='x', pady=(px(2), 0))
+        tk.Label(fav, text='즐겨찾기 분류', bg=HEAD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(14), px(6)))
+        self.cat_box = ttk.Combobox(fav, textvariable=self.save_cat, state='readonly', width=14,
                                     postcommand=lambda: self.cat_box.configure(values=self.bm.names() + ['＋ 새 분류…']))
         self.cat_box.pack(side='left')
         self.cat_box.bind('<<ComboboxSelected>>', self._category_chosen)
-        tk.Label(fav, textvariable=self.bm_msg, bg=HEAD, fg=OK_INK, font=ui.FONTS['label_sm']).pack(side='left', padx=px(8))
-        ui.hline(lower, LINE).pack(side='top', fill='x')
-        self.topic_bar = tk.Frame(lower, bg=HEAD)
+        self.topic_bar = tk.Frame(self.more_panel, bg=HEAD)
         self.topic_bar.pack(side='top', fill='x')
         self.topic_vars = {}
+        self._apply_more()
 
         self.detail = _reading_text(lower, height=15)
         dscroll = ttk.Scrollbar(lower, orient='vertical', command=self.detail.yview, style='Card.Vertical.TScrollbar')
@@ -592,7 +607,7 @@ class ResultsWindow(tk.Toplevel):
         '공식 원문 ↗': '고른 문헌의 원문 사이트를 브라우저로 엽니다.',
         '비슷한 문헌': '고른 문헌과 내용이 비슷한 문헌을 찾습니다.',
         '텍스트 분석': '비슷한 문헌 찾기 · 낱말 살펴보기 · 자동 분류',
-        '더 보기 ▾': '새로고침(F5) · 원문 주소 복사 · 관계 후보 지도 · 추천 성능',
+        '더 보기 ▾': '새로고침(F5) · 원문 주소 복사 · 파일 폴더 열기 · 관계 후보 지도 · 추천 성능',
         '이 검색 저장': '지금 결과를 이름을 붙여 원하는 위치에 저장합니다. 임시 검색결과는 새 검색을 하면 바뀝니다.',
         '저장한 검색 열기': '전에 저장해 둔 검색을 엽니다.',
         '←  연구실로': '결과 창을 닫고 검색 화면으로 돌아갑니다(Esc).',
@@ -622,6 +637,19 @@ class ResultsWindow(tk.Toplevel):
                 if var in tips:
                     ui.tip(w, tips[var])
         ui.tip(self.query_entry, '제목·본문에서 찾기. Enter: 첫 결과 열기 → 한 번 더 Enter: 본문 펼치기·다음 찾은 곳. ↓: 목록으로. Ctrl+F: 이 칸으로.')
+
+    def _toggle_more(self):
+        self.more_open.set(not self.more_open.get())
+        settings.save(viewer_more_open=self.more_open.get())
+        self._apply_more()
+
+    def _apply_more(self):
+        if self.more_open.get():
+            self.more_panel.pack(side='top', fill='x', after=self._more_line)
+            self.more_toggle.configure(text='분류 ▾')
+        else:
+            self.more_panel.pack_forget()
+            self.more_toggle.configure(text='분류 ▸')
 
     def _focus_query(self, event=None):
         self.query_entry.focus_set()
@@ -830,11 +858,10 @@ class ResultsWindow(tk.Toplevel):
             prio += '  ·  사료의 한자 이름도 찾음: ' + ' · '.join(found)
         if hasattr(self, 'find_msg'):
             self.find_msg.set(f'{len(self.filtered)}건' if self.query.get().strip() else '')
-        where = ("임시 검색결과 · 아직 저장 안 함('이 검색 저장'으로 남기기)" if self.folder.name == '임시 검색결과'
-                 else f'저장한 검색: {self.folder.name}')
-        self.info.set(f'{where}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
-                      + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
-                         if any(counts[name] for name in hf.NAMES) else ''))
+        where = ('임시 검색결과(저장 안 함)' if self.folder.name == '임시 검색결과' else self.folder.name)
+        self.info.set(f'{where}  ·  {len(self.filtered)} / {len(self.rows)}건  ⓘ')
+        self.info_detail = '\n'.join(x.strip() for x in (prio + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
+                                                                if any(counts[name] for name in hf.NAMES) else '')).split('  ·  ') if x.strip())
         if self.shown:
             again = [i for i, row in self.shown.items() if keep and row.get('key') in keep]
             self.tree.selection_set(again or ['0'])
