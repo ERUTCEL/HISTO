@@ -23,6 +23,7 @@ import mtl
 import bookmarks as bm
 import aliases
 import opendict
+import relation_types as rtypes
 import reader
 import period
 import history_fields as hf
@@ -257,53 +258,95 @@ def _open_link(text, event):
 
 
 class RelationsWindow(tk.Toplevel):
+    """관계 후보 지도: 같은 문장에 함께 나온 표현을 잇습니다(관계의 종류는 뜻하지 않음).
+    같은 데이터를 여러 모양으로 그립니다 — 원형 · 중심형 · 연결망 · 표 · 시간 흐름."""
+
+    STYLES = (('circle', '원형', '표현을 원 위에 놓고 함께 나온 짝을 잇습니다. 선이 굵을수록 근거 기록이 많습니다.'),
+              ('center', '중심형', '고른 표현을 가운데 두고, 함께 나온 기록이 많을수록 가까이 놓습니다. 다른 표현을 누르면 가운데가 바뀝니다.'),
+              ('network', '연결망', '자주 함께 나오는 표현끼리 모이도록 배치합니다. 무리를 보기 좋습니다.'),
+              ('matrix', '표', '표현 × 표현 표. 칸이 진할수록 함께 나온 기록이 많습니다. 칸을 누르면 근거를 봅니다.'),
+              ('timeline', '시간 흐름', '연결마다 근거 기록이 어느 시기에 나오는지 연대 축 위에 점으로 보여 줍니다(연대가 있는 기록만).'))
 
     def __init__(self, parent, rows):
         super().__init__(parent)
         apply_theme(self)
-        self.title('관계 후보 지도 — 공동 등장, 관계 미확정')
-        ui.fit_geometry(self, 1040, 800, 760, 600)
+        self.title('관계도 — 공동 등장, 관계 미확정')
+        ui.fit_geometry(self, 1100, 860, 780, 620)
+        year_of = {r.get('key'): r['analysis'].get('year') for r in rows}
         relations = [rel for row in rows for rel in row['analysis']['relations']]
         counts = Counter(n for rel in relations for n in (rel['source'], rel['target']))
         names = [name for name, _ in counts.most_common(12)]
         grouped = {}
         for rel in relations:
             pair = tuple(sorted((rel['source'], rel['target'])))
-            if all(x in names for x in pair):
+            if pair[0] != pair[1] and all(x in names for x in pair):
                 grouped.setdefault(pair, []).append(rel)
         self.edges = sorted(grouped.items(), key=lambda item: -len(item[1]))[:30]
+        # 연결마다 관계 종류 후보(근거 문장의 단서 낱말 · relation_types 참고)
+        self.kinds = [rtypes.summarize(ev, a, b) for (a, b), ev in self.edges]
+        self.kind_vars = {k: tk.BooleanVar(value=True) for k in rtypes.NAMES}
+        self._names = names
+        self._counts = counts
+        self._year_of = year_of
+        self._edge_ids = {}
+        self._current = 0
+        self._center = names[0] if names else None
+        self.style_var = tk.StringVar(value=settings.get('relations_style', 'circle'))
+        if self.style_var.get() not in {k for k, _, _ in self.STYLES}:
+            self.style_var.set('circle')
 
         head = tk.Frame(self, bg=CARD)
         head.pack(fill='x')
         inner = tk.Frame(head, bg=CARD)
         inner.pack(fill='x', padx=px(24), pady=(px(18), px(14)))
         trow = tk.Frame(inner, bg=CARD)
-        trow.pack(anchor='w')
+        trow.pack(fill='x')
         ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.go_back, cursor='hand2').pack(side='left', padx=(0, px(10)))
-        tk.Label(trow, text='관계 후보 지도', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        tk.Label(trow, text='관계도', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        ui.info_icon(trow, '현재 목록의 문헌에서 같은 문장에 나온 표현을 잇습니다. 혈연·지시·소유 같은 관계의 종류를 뜻하지 않습니다.\n'
+                           '많이 나온 표현 12개 · 연결 최대 30개. 한문·국문·주석 중복이 있을 수 있습니다.', CARD).pack(side='left', padx=(px(12), 0))
+        seg = tk.Frame(trow, bg=CARD)
+        seg.pack(side='right')
+        for key, label, desc in self.STYLES:
+            b = ttk.Radiobutton(seg, text=label, value=key, variable=self.style_var, style='Seg.Toolbutton',
+                                command=self._style_changed, cursor='hand2')
+            b.pack(side='left', padx=(px(4), 0))
+            ui.tip(b, desc)
         self.bind('<Escape>', lambda e: self.go_back())
         self.bind('<Alt-Left>', lambda e: self.go_back())
-        tk.Label(inner, text='현재 필터의 문헌에서 같은 문장에 나온 표현을 연결합니다. 혈연·지시·소유 관계를 뜻하지 않습니다.\n'
-                             '상위 12개 표현 / 최대 30개 연결. 한문·국문 및 주석 중복이 있을 수 있습니다.',
-                 bg=CARD, fg=MUTED, font=ui.FONTS['small'], justify='left').pack(anchor='w', pady=(px(4), 0))
+        legend = tk.Frame(inner, bg=CARD)
+        legend.pack(fill='x', pady=(px(10), 0))
+        tk.Label(legend, text='관계 종류', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
+        n_by = Counter(main for main, _ in self.kinds)
+        for k in rtypes.NAMES:
+            box = tk.Frame(legend, bg=CARD)
+            box.pack(side='left', padx=(0, px(12)))
+            tk.Label(box, text='●', bg=CARD, fg=rtypes.COLORS[k], font=ui.FONTS['body']).pack(side='left')
+            cb = ttk.Checkbutton(box, text=f'{k} {n_by.get(k, 0)}', variable=self.kind_vars[k], command=self._draw, cursor='hand2')
+            cb.pack(side='left')
+            ui.tip(cb, '근거 문장에 이 종류의 단서 낱말이 있는 연결입니다(후보). 끄면 지도에서 숨깁니다.' if k != rtypes.UNKNOWN
+                   else '단서 낱말이 없어 종류를 정하지 않은 연결(같은 문장에 함께 나옴).')
+        ui.info_icon(legend, '관계 종류는 근거 문장 속 단서 낱말로 정한 후보입니다.\n'
+                             '· 처벌·대립(賜死·유배·탄핵…)·의례·장소(사당·제사·시호…): 두 표현 가까이에 단서가 있으면\n'
+                             '· 명령·보고(전교·아뢰다·상소…): 단서가 두 이름 사이에 있고 두 이름이 가까울 때만\n'
+                             '· 부정(…하지 않음)은 빼고, 이름 속 글자·다른 말의 일부는 단서로 보지 않습니다.\n'
+                             '혈연·혼인·천거는 검증에서 맞는 비율이 낮아(70% 미만) 아직 표시하지 않습니다.', CARD).pack(side='left')
         ui.hline(head, LINE).pack(fill='x')
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill='both', expand=True, padx=px(20), pady=px(16))
         graph = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
         graph.pack(fill='x')
-        self.canvas = tk.Canvas(graph, height=px(360), bg=CARD, highlightthickness=0)
+        self.canvas = tk.Canvas(graph, height=px(430), bg=CARD, highlightthickness=0)
         self.canvas.pack(fill='x')
-        self._names = names
-        self._edge_ids = []
-        self._current = 0
-        self.canvas.bind('<Configure>', lambda e: self._draw(e.width))
+        self.canvas.bind('<Configure>', lambda e: self._draw())
 
         pick = tk.Frame(body, bg=BG)
         pick.pack(fill='x', pady=(px(14), px(8)))
         tk.Label(pick, text='연결', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(10)))
         self.edges_list = ttk.Combobox(pick, state='readonly',
-                                       values=[f'{a} ↔ {b} · 근거 기록 {len(e)}건' for (a, b), e in self.edges])
+                                       values=[f'{a} ↔ {b} · {self.kinds[i][0]} · 근거 기록 {len(e)}건'
+                                               for i, ((a, b), e) in enumerate(self.edges)])
         self.edges_list.pack(side='left', fill='x', expand=True)
         self.edges_list.bind('<<ComboboxSelected>>', lambda e: self.show_edge(self.edges_list.current()))
         box = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
@@ -318,30 +361,206 @@ class RelationsWindow(tk.Toplevel):
         else:
             self.evidence.insert('1.0', '현재 문헌에서 근거를 갖춘 공동 등장 후보를 찾지 못했습니다.', 'note')
 
-    def _draw(self, width):
-        self.canvas.delete('all')
+    # ── 그리기 ──────────────────────────────────────────
+    def _style_changed(self):
+        settings.save(relations_style=self.style_var.get())
+        self._draw()
+
+    def _draw(self):
+        c = self.canvas
+        c.delete('all')
+        self._edge_ids = {}
+        width, height = max(c.winfo_width(), px(600)), max(c.winfo_height(), px(300))
+        if not self._names:
+            c.create_text(width / 2, height / 2, text='그릴 연결이 없습니다.', fill=MUTED, font=ui.FONTS['body'])
+            return
+        style = self.style_var.get()
+        if style == 'matrix':
+            self._draw_matrix(width, height)
+        elif style == 'timeline':
+            self._draw_timeline(width, height)
+        else:
+            pos = {'center': self._layout_center, 'network': self._layout_network}.get(style, self._layout_circle)(width, height)
+            edges = [(i, e) for i, e in enumerate(self.edges)
+                     if self._visible(i) and (style != 'center' or self._center in e[0])]
+            self._draw_graph(pos, edges)
+
+    def _visible(self, index):
+        return self.kind_vars[self.kinds[index][0]].get()
+
+    def _layout_circle(self, width, height):
         names = self._names
-        cx, cy = width / 2, px(180)
-        rx, ry = max(px(160), width / 2 - px(110)), px(130)
-        positions = {name: (cx + rx * math.cos(2 * math.pi * i / max(1, len(names))),
-                            cy + ry * math.sin(2 * math.pi * i / max(1, len(names))))
-                     for i, name in enumerate(names)}
-        self._edge_ids = []
-        for index, (pair, evidence) in enumerate(self.edges):
-            x1, y1 = positions[pair[0]]
-            x2, y2 = positions[pair[1]]
+        cx, cy = width / 2, height / 2
+        rx, ry = max(px(160), width / 2 - px(110)), height / 2 - px(40)
+        return {n: (cx + rx * math.cos(2 * math.pi * i / len(names) - math.pi / 2),
+                    cy + ry * math.sin(2 * math.pi * i / len(names) - math.pi / 2)) for i, n in enumerate(names)}
+
+    def _layout_center(self, width, height):
+        center = self._center if self._center in self._names else self._names[0]
+        self._center = center
+        strength = Counter()
+        for (a, b), ev in self.edges:
+            if center in (a, b):
+                strength[b if a == center else a] += len(ev)
+        others = [n for n in self._names if n != center]
+        top = max(strength.values()) if strength else 1
+        cx, cy = width / 2, height / 2
+        rmax = min(width / 2 - px(90), height / 2 - px(30))
+        pos = {center: (cx, cy)}
+        for i, n in enumerate(others):
+            # 함께 나온 기록이 많을수록 가까이(없으면 바깥 테두리)
+            r = rmax * (0.35 + 0.65 * (1 - strength[n] / top)) if strength[n] else rmax
+            ang = 2 * math.pi * i / max(1, len(others)) - math.pi / 2
+            pos[n] = (cx + r * math.cos(ang) * (width / 2 - px(90)) / rmax, cy + r * math.sin(ang))
+        return pos
+
+    def _layout_network(self, width, height):
+        """간단한 힘 배치: 연결된 표현은 끌어당기고, 모든 표현은 서로 밀어냅니다(같은 입력이면 같은 그림)."""
+        names = self._names
+        n = len(names)
+        pos = {name: [math.cos(2 * math.pi * i / n), math.sin(2 * math.pi * i / n)] for i, name in enumerate(names)}
+        weight = {pair: len(ev) for pair, ev in self.edges}
+        k = 1.6 / math.sqrt(n)
+        for step in range(300):
+            disp = {name: [0.0, 0.0] for name in names}
+            for i, a in enumerate(names):
+                for b in names[i + 1:]:
+                    dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
+                    d = math.hypot(dx, dy) or 0.01
+                    f = k * k / d
+                    disp[a][0] += dx / d * f; disp[a][1] += dy / d * f
+                    disp[b][0] -= dx / d * f; disp[b][1] -= dy / d * f
+            for (a, b), w in weight.items():
+                dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
+                d = math.hypot(dx, dy) or 0.01
+                f = d * d / k * (1 + math.log1p(w))
+                disp[a][0] -= dx / d * f; disp[a][1] -= dy / d * f
+                disp[b][0] += dx / d * f; disp[b][1] += dy / d * f
+            t = 0.1 * (1 - step / 300) + 0.005
+            for name in names:
+                dx, dy = disp[name]
+                d = math.hypot(dx, dy) or 0.01
+                pos[name][0] += dx / d * min(d, t)
+                pos[name][1] += dy / d * min(d, t)
+        xs = [p[0] for p in pos.values()]; ys = [p[1] for p in pos.values()]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        sx = (width - px(200)) / ((x1 - x0) or 1); sy = (height - px(70)) / ((y1 - y0) or 1)
+        return {name: (px(100) + (p[0] - x0) * sx, px(35) + (p[1] - y0) * sy) for name, p in pos.items()}
+
+    def _draw_graph(self, pos, edges):
+        c = self.canvas
+        for index, (pair, evidence) in edges:
+            (x1, y1), (x2, y2) = pos[pair[0]], pos[pair[1]]
             tag = f'edge{index}'
-            width_ = max(1, min(px(1) + len(evidence) // 2, px(6)))
-            line = self.canvas.create_line(x1, y1, x2, y2, fill=ACCENT if index == self._current else '#C9C1B0',
-                                           width=width_, tags=(tag,))
-            self._edge_ids.append(line)
-            self.canvas.tag_bind(tag, '<Button-1>', lambda event, i=index: self.show_edge(i))
-            self.canvas.tag_bind(tag, '<Enter>', lambda e: self.canvas.configure(cursor='hand2'))
-            self.canvas.tag_bind(tag, '<Leave>', lambda e: self.canvas.configure(cursor=''))
-        for name, (x, y) in positions.items():
+            base = max(1, min(px(1) + len(evidence) // 2, px(7)))
+            line = c.create_line(x1, y1, x2, y2, fill=rtypes.COLORS[self.kinds[index][0]],
+                                 width=base + (px(3) if index == self._current else 0),
+                                 dash=() if index == self._current or self.kinds[index][0] != rtypes.UNKNOWN else (4, 3),
+                                 tags=(tag,))
+            self._edge_ids[index] = line
+            c.tag_bind(tag, '<Button-1>', lambda event, i=index: self.show_edge(i))
+            c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
+            c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
+        top = max(self._counts[n] for n in self._names) or 1
+        for name, (x, y) in pos.items():
+            tag = 'node_' + str(self._names.index(name))
             w = max(px(40), ui.FONTS['label_sm'].measure(name) // 2 + px(14))
-            self.canvas.create_rectangle(x - w, y - px(16), x + w, y + px(16), fill=CARD, outline=ACCENT, width=2)
-            self.canvas.create_text(x, y, text=name, fill=ACCENT, font=ui.FONTS['label_sm'])
+            hub = self.style_var.get() == 'center' and name == self._center
+            c.create_rectangle(x - w, y - px(16), x + w, y + px(16), fill=ACCENT if hub else CARD, outline=ACCENT,
+                               width=2 + int(2 * self._counts[name] / top), tags=(tag,))
+            c.create_text(x, y, text=name, fill='white' if hub else ACCENT, font=ui.FONTS['label_sm'], tags=(tag,))
+            c.tag_bind(tag, '<Button-1>', lambda e, n=name: self._node_clicked(n))
+            c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
+            c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
+
+    def _node_clicked(self, name):
+        """표현을 누르면: 중심형이면 가운데로, 아니면 그 표현의 가장 굵은 연결을 보여 줌."""
+        if self.style_var.get() == 'center':
+            self._center = name
+        first = next((i for i, (pair, _) in enumerate(self.edges) if name in pair), None)
+        if first is not None:
+            self._current = first
+            self.edges_list.current(first)
+            self._fill_evidence(first)
+        self._draw()
+
+    def _draw_matrix(self, width, height):
+        c, names = self.canvas, self._names
+        n = len(names)
+        label_w = max(ui.FONTS['label_sm'].measure(x) for x in names) + px(16)
+        cell = min((width - label_w - px(30)) / n, (height - px(90)) / n)
+        x0, y0 = label_w + px(10), px(80)
+        weight = {pair: (i, len(ev)) for i, (pair, ev) in enumerate(self.edges)}
+        top = max((w for _, w in weight.values()), default=1)
+        for i, name in enumerate(names):
+            c.create_text(x0 - px(8), y0 + (i + 0.5) * cell, text=name, anchor='e', fill=INK, font=ui.FONTS['label_sm'])
+            c.create_text(x0 + (i + 0.5) * cell, y0 - px(6), text=name, anchor='w', angle=60, fill=INK, font=ui.FONTS['label_sm'])
+        for i, a in enumerate(names):
+            for j, b in enumerate(names):
+                pair = tuple(sorted((a, b)))
+                x, y = x0 + j * cell, y0 + i * cell
+                if a == b:
+                    c.create_rectangle(x, y, x + cell, y + cell, fill='#EFEBE2', outline=CARD)
+                    continue
+                idx, w = weight.get(pair, (None, 0))
+                if idx is not None and not self._visible(idx):
+                    idx, w = None, 0
+                shade = 0 if not w else 0.2 + 0.8 * w / top
+                fill = _blend('#FFFFFF', rtypes.COLORS[self.kinds[idx][0]], shade) if w else '#FAF8F3'
+                tag = f'cell{i}_{j}'
+                c.create_rectangle(x, y, x + cell, y + cell, fill=fill, outline=CARD, tags=(tag,))
+                if w:
+                    c.create_text(x + cell / 2, y + cell / 2, text=str(w), fill='white' if shade > 0.55 else INK,
+                                  font=ui.FONTS['label_sm'], tags=(tag,))
+                    c.tag_bind(tag, '<Button-1>', lambda e, k=idx: self.show_edge(k))
+                    c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
+                    c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
+
+    def _draw_timeline(self, width, height):
+        c = self.canvas
+        rows = [e for i, e in enumerate(self.edges) if self._visible(i)][:12]
+        years = [int(y) for _, ev in rows for rel in ev for y in [self._year_of.get(rel.get('record_key'))] if y]
+        if not years:
+            c.create_text(width / 2, height / 2, text='연대가 있는 근거 기록이 없습니다.', fill=MUTED, font=ui.FONTS['body'])
+            return
+        lo, hi = min(years), max(years)
+        if hi - lo < 10:
+            lo, hi = lo - 5, hi + 5
+        label_w = max(ui.FONTS['label_sm'].measure(f'{a} ↔ {b}') for (a, b), _ in rows) + px(20)
+        x0, x1 = label_w + px(16), width - px(30)
+        y0, row_h = px(20), (height - px(60)) / max(1, len(rows))
+        scale = lambda y: x0 + (y - lo) / (hi - lo) * (x1 - x0)
+        # 연대 눈금
+        step = next(s for s in (10, 20, 50, 100, 200, 500) if (hi - lo) / s <= 10)
+        for t in range((lo // step + 1) * step, hi + 1, step):
+            x = scale(t)
+            c.create_line(x, y0, x, height - px(35), fill='#EEE9DF')
+            c.create_text(x, height - px(22), text=str(t), fill=MUTED, font=ui.FONTS['small'])
+        for r, ((a, b), ev) in enumerate(rows):
+            index = self.edges.index(((a, b), ev))
+            y = y0 + (r + 0.5) * row_h
+            tag = f'row{index}'
+            color = ACCENT if index == self._current else '#8A93A0'
+            c.create_text(px(10), y, text=f'{a} ↔ {b}', anchor='w', fill=INK if index == self._current else MUTED,
+                          font=ui.FONTS['label_sm'], tags=(tag,))
+            c.create_line(x0, y, x1, y, fill='#F1EDE4', tags=(tag,))
+            bins, kinds_in = Counter(), {}
+            for rel in ev:
+                yr = self._year_of.get(rel.get('record_key'))
+                if yr:
+                    b = max(lo, min(hi, int(yr) // max(1, step // 5) * max(1, step // 5)))
+                    bins[b] += 1
+                    kinds_in.setdefault(b, Counter())[rel.get('_kind', rtypes.UNKNOWN)] += 1
+            for yr, n in bins.items():
+                rad = min(px(3) + n * px(1.5), row_h / 2 - px(2))
+                cx = scale(yr)
+                typed = {k: v for k, v in kinds_in[yr].items() if k != rtypes.UNKNOWN}
+                kind = max(typed, key=typed.get) if typed else rtypes.UNKNOWN
+                c.create_oval(cx - rad, y - rad, cx + rad, y + rad, fill=rtypes.COLORS[kind],
+                              outline=INK if index == self._current else '', tags=(tag,))
+            c.tag_bind(tag, '<Button-1>', lambda e, i=index: self.show_edge(i))
+            c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
+            c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
 
     def go_back(self):
         parent = self.master
@@ -352,16 +571,29 @@ class RelationsWindow(tk.Toplevel):
         except tk.TclError:
             pass
 
-    def show_edge(self, index):
-        self._current = index
-        self.edges_list.current(index)
-        for i, line in enumerate(self._edge_ids):
-            self.canvas.itemconfigure(line, fill=ACCENT if i == index else '#C9C1B0')
+    def _fill_evidence(self, index):
         self.evidence.delete('1.0', 'end')
-        for rel in self.edges[index][1][:30]:
-            self.evidence.insert('end', f"[{rel['basis']}] {rel['record_key']}\n", 'meta')
+        rels = sorted(self.edges[index][1], key=lambda r: r.get('_kind', rtypes.UNKNOWN) == rtypes.UNKNOWN)   # 종류 근거가 있는 기록 먼저
+        for rel in rels[:30]:
+            yr = self._year_of.get(rel.get('record_key'))
+            kind, cue = rel.get('_kind', rtypes.UNKNOWN), rel.get('_cue', '')
+            self.evidence.insert('end', f"[{kind}{f' · 단서 {cue}' if cue else ''}] [{rel['basis']}] {rel['record_key']}{f' · {yr}' if yr else ''}\n", 'meta')
             self.evidence.insert('end', f"{rel['evidence']}\n", 'body')
             self.evidence.insert('end', f"{rel['url']}\n\n", 'link')
+
+    def show_edge(self, index):
+        if index is None or index < 0:
+            return
+        self._current = index
+        self.edges_list.current(index)
+        self._fill_evidence(index)
+        self._draw()
+
+
+def _blend(c1, c2, t):
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return '#' + ''.join(f'{round(x + (y - x) * t):02x}' for x, y in zip(a, b))
 
 
 class ResultsWindow(tk.Toplevel):
