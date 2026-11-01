@@ -205,12 +205,13 @@ def read_results(folder, profile=None):
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
                                     str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
     # 시대 가중치: 대상의 큰 시대(고대·고려·조선·근대·일제강점기·현대)와 다른 시대의 기록은 낮춤.
-    # 대상 시대는 직접 고른 값(설정 '대상 시대')이 있으면 그것, 없으면 자동(직접 언급 사료의 최빈 시대)
+    # 대상 시대는 직접 고른 값(설정 '대상 시대')이 있으면 그것, 없으면 자동(period.target_era: 확실할 때만, 이웃한 두 시대일 수 있음)
     choice = profile.get('era_choice')
     if choice in period.ERAS:
-        era, candidates = period.ERAS.index(choice), []
+        i = period.ERAS.index(choice)
+        era, candidates = (i, i), []
     else:
-        era, candidates = period.target_era(rows, secondary_kind)   # 확실할 때만 시대가 정해짐
+        era, candidates = period.target_era(rows, secondary_kind)   # 확실할 때만 (시작, 끝) 시대가 정해짐
     period.apply_era(rows, era)
     profile = dict(profile, _era=era, _era_auto=choice not in period.ERAS, _era_candidates=candidates, _hanja_found=hanja_found)
     rows.sort(key=lambda row: (-row['analysis']['score'], row['key']))
@@ -701,11 +702,12 @@ class ResultsWindow(tk.Toplevel):
         prio = (f'  ·  우선 본문: 관련성 높은 {len(self.priority_keys)}건만 보는 중' if self.priority_keys and self.only_priority.get() else '')
         era = (self.profile or {}).get('_era')
         if era is not None:
-            prio += f"  ·  대상 시대: {period.ERAS[era]}{'(자동)' if (self.profile or {}).get('_era_auto') else ''}"
+            prio += f"  ·  대상 시대: {period.era_label(era)}{'(자동)' if (self.profile or {}).get('_era_auto') else ''}"
         else:
             cands = (self.profile or {}).get('_era_candidates') or []
             prio += ('  ·  대상 시대가 확실하지 않아 시대 가중치를 쓰지 않습니다'
-                     + (f"(후보: {'·'.join(period.ERAS[c] for c in cands)}) — 오른쪽 '대상 시대'에서 고르세요" if cands else ''))
+                     + (f"(후보: {'·'.join(period.ERAS[c] for c in cands)})" if cands else '(이름이 직접 나오는 사료가 적음)')
+                     + " — 오른쪽 '대상 시대'에서 고를 수 있습니다")
         found = (self.profile or {}).get('_hanja_found') or []
         if found:
             prio += '  ·  사료의 한자 이름도 찾음: ' + ' · '.join(found)
