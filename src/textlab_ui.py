@@ -57,6 +57,9 @@ def _fill(tree, rows):
 
 
 def _note(parent, text, bg=BG):
+    """설명 문장: 늘 보이는 회색 글 대신 'ⓘ 설명'에 마우스를 올리면 보이게. 빈 문자열이면 결과를 적는 상태 줄."""
+    if text:
+        return ui.info_icon(parent, text, bg)
     label = tk.Label(parent, text=text, bg=bg, fg=MUTED, font=ui.FONTS['small'], justify='left', anchor='w')
     label.bind('<Configure>', lambda e: label.configure(wraplength=max(px(200), e.width - px(4))))
     return label
@@ -620,10 +623,14 @@ class TextLabWindow(tk.Toplevel):
         ttk.Button(row, text='비교하기', style='Primary.TButton', command=self.run_mtl, cursor='hand2').pack(side='left')
         tk.Label(row, text='새 분류 이름', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(18), px(6)))
         self.task_name = tk.StringVar(value='정치적 입장')
-        ttk.Entry(row, textvariable=self.task_name, width=12).pack(side='left')
+        task_entry = ttk.Entry(row, textvariable=self.task_name, width=12)
+        task_entry.pack(side='left')
+        task_entry.bind('<Return>', lambda e: self.add_task())
         tk.Label(row, text='항목(쉼표로)', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(8), px(6)))
         self.task_labels = tk.StringVar(value='찬성, 반대, 중립')
-        ttk.Entry(row, textvariable=self.task_labels, width=20).pack(side='left')
+        labels_entry = ttk.Entry(row, textvariable=self.task_labels, width=20)
+        labels_entry.pack(side='left')
+        labels_entry.bind('<Return>', lambda e: self.add_task())
         ttk.Button(row, text='분류 만들기', command=self.add_task, cursor='hand2').pack(side='left', padx=(px(6), 0))
         self.mtl_summary = tk.StringVar(value='')
         tk.Label(page, textvariable=self.mtl_summary, bg=BG, fg=INK, font=ui.FONTS['label'], anchor='w', justify='left').pack(fill='x', pady=(px(6), 0))

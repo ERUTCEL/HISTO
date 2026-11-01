@@ -585,3 +585,73 @@ class ScrollFrame(tk.Frame):
         self.unbind_all('<MouseWheel>')
         self.unbind_all('<Button-4>')
         self.unbind_all('<Button-5>')
+
+
+# ── 마우스를 올리면 나오는 설명(툴팁) ─────────────────────────
+# 화면에 늘 깔려 있던 회색 부연 설명 대신, 버튼·입력칸에 마우스를 잠시 올리면 설명을 보여 줍니다.
+class _Tip:
+    DELAY = 350
+
+    def __init__(self, widget, text):
+        self.widget, self.text = widget, text
+        self.win = self.job = None
+        widget.bind('<Enter>', self._schedule, add='+')
+        widget.bind('<Leave>', self._hide, add='+')
+        widget.bind('<ButtonPress>', self._hide, add='+')
+
+    def _schedule(self, event=None):
+        self._cancel()
+        self.job = self.widget.after(self.DELAY, self._show)
+
+    def _cancel(self):
+        if self.job:
+            try:
+                self.widget.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
+
+    def _show(self):
+        self.job = None
+        text = self.text() if callable(self.text) else self.text
+        if not text or self.win is not None:
+            return
+        try:
+            x = self.widget.winfo_pointerx() + px(14)
+            y = self.widget.winfo_pointery() + px(18)
+            win = tk.Toplevel(self.widget)
+        except tk.TclError:
+            return
+        win.wm_overrideredirect(True)
+        try:
+            win.wm_attributes('-topmost', True)
+        except tk.TclError:
+            pass
+        tk.Label(win, text=text, bg='#FFFDF5', fg=INK, font=FONTS.get('small'), justify='left', anchor='w',
+                 wraplength=px(380), padx=px(10), pady=px(7), relief='solid', bd=1).pack()
+        win.update_idletasks()
+        sw = win.winfo_screenwidth()
+        x = min(x, sw - win.winfo_reqwidth() - px(8))
+        win.wm_geometry(f'+{x}+{y}')
+        self.win = win
+
+    def _hide(self, event=None):
+        self._cancel()
+        if self.win is not None:
+            try:
+                self.win.destroy()
+            except tk.TclError:
+                pass
+            self.win = None
+
+
+def tip(widget, text):
+    """widget에 마우스를 올리면 text(문자열 또는 문자열을 돌려주는 함수)를 보여 줍니다."""
+    widget._tip = _Tip(widget, text)
+    return widget
+
+
+def info_icon(parent, text, bg=None):
+    """긴 설명을 대신하는 작은 'ⓘ' 표시. 마우스를 올리면 설명이 나옵니다."""
+    label = tk.Label(parent, text='ⓘ 설명', bg=bg or BG, fg=ACCENT, font=FONTS.get('small'), cursor='question_arrow', anchor='w')
+    return tip(label, text)

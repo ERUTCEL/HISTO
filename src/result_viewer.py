@@ -418,6 +418,9 @@ class ResultsWindow(tk.Toplevel):
         ttk.Button(trow, text='←  연구실로', style='Quiet.TButton', command=self.go_back, cursor='hand2').pack(side='left', padx=(0, px(10)))
         tk.Label(trow, text='문헌 결과', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
         self.bind('<Escape>', self._on_escape)
+        for key in ('<Control-f>', '<Control-F>'):
+            self.bind(key, self._focus_query)
+        self.bind('<F5>', lambda e: self.reload())
         self.bind('<Alt-Left>', lambda e: self.go_back())
         tk.Label(titles, textvariable=self.info, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
                  justify='left').pack(anchor='w', pady=(px(3), 0))
@@ -431,8 +434,14 @@ class ResultsWindow(tk.Toplevel):
         controls = tk.Frame(top, bg=CARD)
         controls.pack(fill='x', padx=px(28), pady=(px(14), px(16)))
         tk.Label(controls, text='찾기', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
-        self.query_entry = ttk.Entry(controls, textvariable=self.query, width=16)
+        self.query_entry = ttk.Entry(controls, textvariable=self.query, width=18)
         self.query_entry.pack(side='left', padx=(0, px(10)))
+        # 검색엔진처럼: Enter → 첫 결과를 열어 찾은 곳 표시 · 한 번 더 Enter → 본문 펼치기 · ↓ → 목록으로
+        for key in ('<Return>', '<KP_Enter>'):
+            self.query_entry.bind(key, self._query_enter)
+        self.query_entry.bind('<Down>', self._query_to_list)
+        self.find_msg = tk.StringVar()
+        tk.Label(controls, textvariable=self.find_msg, bg=CARD, fg=ACCENT, font=ui.FONTS['label_sm']).pack(side='left', padx=(0, px(10)))
         self.source_box = ttk.Combobox(controls, textvariable=self.source_filter, state='readonly', width=13,
                                        values=['모든 자료원'] + [s.short for s in BY_ID.values()])
         self.source_box.pack(side='left', padx=(0, px(6)))
@@ -453,7 +462,6 @@ class ResultsWindow(tk.Toplevel):
         self.priority_anchor = tk.Label(controls, text='정렬', bg=CARD, fg=MUTED, font=ui.FONTS['small'])
         self.priority_anchor.pack(side='left', padx=(px(10), px(8)))
         ttk.Combobox(controls, textvariable=self.sort_mode, state='readonly', width=12, values=SORTS).pack(side='left')
-        ttk.Button(controls, text='새로고침', style='Quiet.TButton', command=self.reload, cursor='hand2').pack(side='right')
         for variable in (self.query, self.facet, self.period, self.threshold, self.source_filter, self.sort_mode):
             variable.trace_add('write', self.schedule_filter)
         ui.hline(top, LINE).pack(fill='x')
@@ -461,15 +469,19 @@ class ResultsWindow(tk.Toplevel):
         buttons = tk.Frame(self, bg=BG)
         buttons.pack(fill='x', padx=px(28), pady=(px(14), px(12)))
         ttk.Button(buttons, text='선택 문헌 본문 받기', style='Primary.TButton', command=self.collect_selected, cursor='hand2').pack(side='left')
-        ttk.Button(buttons, text='관계 후보 지도', style='Large.TButton', cursor='hand2',
-                   command=lambda: RelationsWindow(self, self.filtered)).pack(side='left', padx=(px(8), 0))
-        self.copy_button = ttk.Button(buttons, text='원문 주소 복사', style='Large.TButton', command=self.copy_url, cursor='hand2')
-        self.copy_button.pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='공식 원문 ↗', style='Outline.TButton', command=self.open_original, cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
-        ttk.Button(buttons, text='추천 성능', style='Large.TButton', command=lambda: PerformanceWindow(self), cursor='hand2').pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='비슷한 문헌', style='Large.TButton', cursor='hand2',
                    command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='텍스트 분석', style='Outline.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+        # 덜 쓰는 기능은 한곳에 모아 버튼 줄을 짧게
+        more = tk.Menu(self, tearoff=0)
+        more.add_command(label='새로고침  (F5)', command=self.reload)
+        more.add_command(label='원문 주소 복사', command=self.copy_url)
+        more.add_command(label='관계 후보 지도', command=lambda: RelationsWindow(self, self.filtered))
+        more.add_command(label='추천 성능 보기', command=lambda: PerformanceWindow(self))
+        more_btn = ttk.Button(buttons, text='더 보기 ▾', style='Large.TButton', cursor='hand2')
+        more_btn.configure(command=lambda: more.tk_popup(more_btn.winfo_rootx(), more_btn.winfo_rooty() + more_btn.winfo_height()))
+        more_btn.pack(side='left', padx=(px(8), 0))
         # 대상 시대: 자동(직접 언급 사료가 가장 많은 시대) 또는 직접 고르기 → 다른 시대 기록은 점수를 낮춤
         self.era_choice = tk.StringVar(value='자동')
         era_box = ttk.Combobox(buttons, textvariable=self.era_choice, state='readonly', width=12, values=['자동'] + list(period.ERAS))
@@ -562,9 +574,11 @@ class ResultsWindow(tk.Toplevel):
             self.detail.tag_bind(tag, '<Button-1>', func)
             self.detail.tag_bind(tag, '<Enter>', lambda e: self.detail.configure(cursor='hand2'))
             self.detail.tag_bind(tag, '<Leave>', lambda e: self.detail.configure(cursor='arrow'))
-        self.bind('<Return>', lambda e: self.expand_body() if e.widget in (self.tree, self.detail) else None)
+        self.bind('<Return>', lambda e: self._enter_in_list() if e.widget in (self.tree, self.detail) else None)
+        self.bind('<KP_Enter>', lambda e: self._enter_in_list() if e.widget in (self.tree, self.detail) else None)
         self._split = split
         split.bind('<Configure>', self._place_sash)
+        self._add_tips()
         self.reload()
 
     def _place_sash(self, event):
@@ -572,6 +586,109 @@ class ResultsWindow(tk.Toplevel):
         if event.width > px(400) and not getattr(self, '_sash_done', False):
             self._sash_done = True
             self.after_idle(lambda: self._split.sashpos(0, int(event.width * 0.58)))
+
+    BUTTON_TIPS = {
+        '선택 문헌 본문 받기': '목록에서 고른 문헌(여러 개 가능)의 본문을 원문 사이트에서 받아 옵니다.',
+        '공식 원문 ↗': '고른 문헌의 원문 사이트를 브라우저로 엽니다.',
+        '비슷한 문헌': '고른 문헌과 내용이 비슷한 문헌을 찾습니다.',
+        '텍스트 분석': '비슷한 문헌 찾기 · 낱말 살펴보기 · 자동 분류',
+        '더 보기 ▾': '새로고침(F5) · 원문 주소 복사 · 관계 후보 지도 · 추천 성능',
+        '이 검색 저장': '지금 결과를 이름을 붙여 원하는 위치에 저장합니다. 임시 검색결과는 새 검색을 하면 바뀝니다.',
+        '저장한 검색 열기': '전에 저장해 둔 검색을 엽니다.',
+        '←  연구실로': '결과 창을 닫고 검색 화면으로 돌아갑니다(Esc).',
+        '검색어가 나온 문헌만': '제목·요약·본문에 검색어가 실제로 나온 문헌만 봅니다.',
+    }
+
+    def _add_tips(self):
+        """버튼·거르기 칸에 마우스를 올리면 설명이 나오게(화면에 깔린 회색 설명 대신)."""
+        def walk(w):
+            for c in w.winfo_children():
+                yield c
+                yield from walk(c)
+        for w in walk(self):
+            try:
+                text = w.cget('text')
+            except tk.TclError:
+                continue
+            if text in self.BUTTON_TIPS:
+                ui.tip(w, self.BUTTON_TIPS[text])
+            if isinstance(w, ttk.Combobox):
+                var = str(w.cget('textvariable'))
+                tips = {str(self.threshold): '점수로 거르기: 60점·80점 이상만 보기',
+                        str(self.era_choice): '대상의 시대. 자동이면 이름이 나온 사료로 정하고, 다른 시대 기록은 점수를 낮춥니다.',
+                        str(self.sort_mode): '추천순: 점수와 내 판정 학습을 함께 반영한 순서',
+                        str(self.source_filter): '자료원으로 거르기', str(self.facet): '역사 분류(관점)로 거르기',
+                        str(self.period): '연대로 거르기'}
+                if var in tips:
+                    ui.tip(w, tips[var])
+        ui.tip(self.query_entry, '제목·본문에서 찾기. Enter: 첫 결과 열기 → 한 번 더 Enter: 본문 펼치기·다음 찾은 곳. ↓: 목록으로. Ctrl+F: 이 칸으로.')
+
+    def _focus_query(self, event=None):
+        self.query_entry.focus_set()
+        self.query_entry.select_range(0, 'end')
+        self.query_entry.icursor('end')
+        return 'break'
+
+    def _query_enter(self, event=None):
+        """찾기 칸 Enter: 바로 거르고 첫 결과를 열어 찾은 낱말이 있는 곳을 보여 준 뒤, 목록으로 이동합니다.
+        목록에서 Enter를 한 번 더 누르면 본문을 펼치고, ↑↓로 다음 결과를 봅니다."""
+        if self._timer:
+            self.after_cancel(self._timer)
+        self.filter_rows()
+        if not self.shown:
+            self.find_msg.set('찾은 문헌 없음')
+            return 'break'
+        self.tree.selection_set('0')
+        self.tree.focus('0')
+        self.tree.see('0')
+        self.show_selected()
+        self._see_first_hit()
+        self.tree.focus_set()
+        q = self.query.get().strip()
+        self.find_msg.set(f"{len(self.filtered)}건" if q else '')
+        return 'break'
+
+    def _query_to_list(self, event=None):
+        if self.shown:
+            first = self.tree.selection()[0] if self.tree.selection() else '0'
+            self.tree.focus(first)
+            self.tree.focus_set()
+            return 'break'
+
+    def _enter_in_list(self):
+        """목록에서 Enter: 본문이 아직 없으면 받아서 펼치고, 이미 있으면 본문에서 찾은 다음 곳으로 이동합니다."""
+        rows = self.selected()
+        if rows and any(not r.get('body') for r in rows):
+            self.expand_body()
+        else:
+            self._see_next_hit()
+
+    def _see_next_hit(self):
+        hits = []
+        for tag in ('hit', 'hit_small', 'hit_bg'):
+            r = self.detail.tag_ranges(tag)
+            hits += [str(r[i]) for i in range(0, len(r), 2)]
+        if not hits:
+            return
+        hits.sort(key=lambda ix: tuple(int(x) for x in ix.split('.')))
+        cur = getattr(self, '_hit_pos', None)
+        later = [h for h in hits if cur is None or self.detail.compare(h, '>', cur)]
+        nxt = later[0] if later else hits[0]   # 끝까지 가면 처음으로
+        self._hit_pos = nxt
+        self.detail.see(nxt)
+        self.detail.tag_remove('hit_now', '1.0', 'end')
+        self.detail.tag_add('hit_now', nxt, f'{nxt} wordend')
+        self.detail.tag_configure('hit_now', underline=True)
+        self.find_msg.set(f'찾은 곳 {hits.index(nxt) + 1}/{len(hits)}')
+
+    def _see_first_hit(self):
+        """본문에서 처음 찾은 낱말(노란 표시)이 보이게 내립니다."""
+        self._hit_pos = None
+        for tag in ('hit', 'hit_small', 'hit_bg'):
+            r = self.detail.tag_nextrange(tag, '1.0')
+            if r:
+                self.detail.see(r[0])
+                return
 
     def _on_escape(self, event=None):
         if self.focus_get() is self.query_entry and self.query.get():
@@ -711,7 +828,11 @@ class ResultsWindow(tk.Toplevel):
         found = (self.profile or {}).get('_hanja_found') or []
         if found:
             prio += '  ·  사료의 한자 이름도 찾음: ' + ' · '.join(found)
-        self.info.set(f'{self.folder}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
+        if hasattr(self, 'find_msg'):
+            self.find_msg.set(f'{len(self.filtered)}건' if self.query.get().strip() else '')
+        where = ("임시 검색결과 · 아직 저장 안 함('이 검색 저장'으로 남기기)" if self.folder.name == '임시 검색결과'
+                 else f'저장한 검색: {self.folder.name}')
+        self.info.set(f'{where}\n전체 {len(self.rows)}건 중 {len(self.filtered)}건 표시' + prio
                       + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                          if any(counts[name] for name in hf.NAMES) else ''))
         if self.shown:
@@ -792,8 +913,9 @@ class ResultsWindow(tk.Toplevel):
         box = ttk.Combobox(top, textvariable=self.annot_task, values=tasks, state='readonly', width=10)
         box.pack(side='left')
         box.bind('<<ComboboxSelected>>', lambda e: self.refresh_topic_bar())
-        tk.Label(top, text=' ✎ 표시함' if ann is not None else ' 아직 표시 안 함 · 괄호 안은 제안', bg=HEAD,
-                 fg=ACCENT if ann is not None else MUTED, font=ui.FONTS['label_sm']).pack(side='left')
+        ui.tip(box, '표시할 분류를 고릅니다. 체크하면 바로 저장되고, 이름 옆 (제안)은 앱이 낱말로 짐작한 것입니다.')
+        if ann is not None:
+            tk.Label(top, text=' ✎ 표시함', bg=HEAD, fg=ACCENT, font=ui.FONTS['label_sm']).pack(side='left')
         if key:
             for text, command in (('지우기', lambda: self.save_topics(clear=True)), ('해당 없음', self.no_topics),
                                   ('제안대로', self.accept_topics)):
@@ -1267,6 +1389,7 @@ class ResultsWindow(tk.Toplevel):
         return 'break'
 
     def show_selected(self, event=None):
+        self._hit_pos = None   # 다른 문헌을 열면 '찾은 곳' 이동을 처음부터
         rows = self.selected()
         if not rows:
             return
@@ -1303,8 +1426,7 @@ class ResultsWindow(tk.Toplevel):
                 parts += [('\n', None), ('  본문을 받아 오는 중입니다…  ', 'action_off'),
                           ('\n받는 대로 이 자리에 펼쳐집니다.\n', 'note')]
             else:
-                parts += [('\n', None), ('  ▼ 본문 펼치기  ', 'action'),
-                          ('\n원문 사이트에서 이 문헌의 본문 전체를 받아 이 자리에 펼칩니다. (Enter 키)\n', 'note'),
+                parts += [('\n', None), ('  ▼ 본문 펼치기 (Enter)  ', 'action'), ('\n\n', None),
                           ('↗ 원문 사이트 열기', 'open_link'), ('\n', None)]
         if row.get('error'):
             parts += [('수집 오류\n', 'head'), (row['error'] + '\n', 'error')]
@@ -1339,8 +1461,7 @@ class ResultsWindow(tk.Toplevel):
         if rows:
             self.clipboard_clear()
             self.clipboard_append('\n'.join(r.get('url', '') for r in rows))
-            self.copy_button.configure(text=f'복사됨 ✓ ({len(rows)}건)')
-            self.after(1600, lambda: self.copy_button.winfo_exists() and self.copy_button.configure(text='원문 주소 복사'))
+            self._flash(f'원문 주소 복사됨 ✓ ({len(rows)}건)')
 
     def collect_selected(self):
         rows = self.selected()

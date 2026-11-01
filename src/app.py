@@ -112,6 +112,17 @@ if not hasattr(collector.total_groups, 'original'):
     collector.total_groups = _primary_groups_first(collector.total_groups)
 
 
+def place_name(folder):
+    """결과 폴더를 사람이 알아보기 쉬운 이름으로: 임시 검색결과면 그렇다고, 저장한 검색이면 그 이름."""
+    try:
+        p = Path(folder).resolve()
+    except (OSError, ValueError):
+        return str(folder)
+    if p == WORK_DIR.resolve():
+        return "임시 검색결과 (아직 저장 안 함 — 결과 창의 '이 검색 저장'으로 남길 수 있음)"
+    return f'{p.name}  ·  {p.parent}'
+
+
 def _same_article(key):
     """같은 기사를 가리키는 키를 하나로: 실록은 국역(k…)·원문(w…) 탭이 같은 기사를 다른 ID로 줍니다."""
     key = re.sub(r'^(sillok:)[kw]', r'\1', str(key or ''))
@@ -243,11 +254,9 @@ class App(tk.Tk):
         self.history = []
         self.current_page = None
         self.back_button = ttk.Button(title_row, text='←  뒤로', style='Link.TButton', command=self.go_back, cursor='hand2')
-        tk.Label(title_row, textvariable=self.page_title, bg=BG, fg=INK, font=ui.FONTS['h1'], anchor='w').pack(side='left')
-        self.lead_label = tk.Label(heads, textvariable=self.page_lead, bg=BG, fg=MUTED, font=ui.FONTS['body'],
-                                   anchor='w', justify='left')
-        self.lead_label.pack(anchor='w', pady=(px(4), 0))
-        heads.bind('<Configure>', lambda e: self.lead_label.configure(wraplength=max(px(300), e.width - px(10))))
+        title_label = tk.Label(title_row, textvariable=self.page_title, bg=BG, fg=INK, font=ui.FONTS['h1'], anchor='w')
+        title_label.pack(side='left')
+        ui.tip(title_label, lambda: self.page_lead.get())   # 화면 소개는 제목에 마우스를 올리면
         chip = tk.Frame(header, bg=CARD, highlightthickness=1, highlightbackground=LINE, padx=px(12), pady=px(5))
         chip.pack(side='right', anchor='s', pady=(0, px(4)))
         self.chip_dot = ui.dot(chip, OK, CARD)
@@ -367,11 +376,13 @@ class App(tk.Tk):
         self.target_entry.pack(side='left', fill='x', expand=True)
         self.target_entry.bind('<Return>', self._target_enter)
         self.target_entry.bind('<KP_Enter>', self._target_enter)
+        for key in ('<Control-f>', '<Control-F>'):
+            self.bind(key, self._focus_target)
         ui.placeholder(self.target_entry, '인물·사건·제도 이름  (예: 숙빈 최씨, 대동법, 장희빈)', variable=self.target)
         self.target_button = ttk.Button(row, text='대상 적용', style='Outline.TButton', command=self.apply_target, cursor='hand2')
         self.target_button.pack(side='left', fill='y', padx=(px(10), 0))
-        tk.Label(card, text='인물·사건·제도 이름을 입력하고 Enter를 누르면 별칭을 검색어에 채웁니다. 한 번 더 Enter를 누르면 검색을 시작합니다.', bg=CARD, fg=MUTED,
-                 font=ui.FONTS['small']).pack(anchor='w')
+        ui.tip(self.target_entry, '인물·사건·제도 이름을 쓰고 Enter → 다른 이름·한자 표기를 검색어 칸에 채웁니다.\n한 번 더 Enter → 검색을 시작합니다.')
+        ui.tip(self.target_button, '다른 이름·한자 표기를 검색어 칸에 채웁니다(Enter와 같음).')
 
         cols = tk.Frame(card, bg=CARD)
         cols.pack(fill='x', pady=(px(20), 0))
@@ -382,7 +393,6 @@ class App(tk.Tk):
         head = tk.Frame(left, bg=CARD)
         head.pack(fill='x')
         tk.Label(head, text='검색어와 별칭', bg=CARD, fg=INK, font=ui.FONTS['label']).pack(side='left')
-        tk.Label(head, text='  ·  한 줄에 하나 · 한자는 한글로 친 뒤 F9', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
         self.terms = tk.Text(left, height=4, font=ui.FONTS['input'], wrap='word', relief='flat', bg=FIELD, fg=INK,
                              insertbackground=INK, padx=px(12), pady=px(9), spacing1=px(2), spacing3=px(2),
                              highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
@@ -390,6 +400,7 @@ class App(tk.Tk):
         self.terms.pack(fill='x', pady=(px(8), 0))
         self.terms.bind('<Button-3>', hanja_input._context_menu)
         ui.placeholder(self.terms, '연구 대상을 적용하면 이름과 별칭이 채워집니다. 직접 적어도 됩니다.\n예: 숙빈 최씨\n淑嬪崔氏')
+        ui.tip(self.terms, '한 줄에 하나씩 적습니다. 한자는 한글로 친 뒤 F9(또는 오른쪽 클릭 → 한자로 바꾸기).')
 
         right = tk.Frame(cols, bg=CARD)
         right.grid(row=0, column=1, sticky='nsew', padx=(px(14), 0))
@@ -402,11 +413,9 @@ class App(tk.Tk):
             b = ttk.Radiobutton(seg, text=label, value=value, variable=self.mode, style='Seg.Toolbutton',
                                 command=self._mode_picked, cursor='hand2')
             b.grid(row=i // 3, column=i % 3, sticky='nsew', padx=(0, px(6)), pady=(0, px(6)))
+            ui.tip(b, MODE_HINTS.get(value, ''))
             self.mode_buttons.append(b)
         self.mode_select = self.mode_buttons[0]
-        self.mode_hint_label = tk.Label(right, textvariable=self.mode_hint, bg=CARD, fg=MUTED, font=ui.FONTS['small'],
-                                        justify='left', anchor='w')
-        self.mode_hint_label.pack(fill='x')
         depth = tk.Frame(right, bg=CARD)
         depth.pack(fill='x', pady=(px(8), 0))
         tk.Label(depth, text='검색 범위', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
@@ -414,8 +423,7 @@ class App(tk.Tk):
         self.depth_box = ttk.Combobox(depth, textvariable=self.depth, values=[d for d, _ in DEPTHS], state='disabled', width=22)
         self.depth_box.pack(side='left')
         self.depth_box.bind('<<ComboboxSelected>>', lambda e: settings.save(depth=self.depth.get()))
-        tk.Label(depth, text=' 목록만 · 전체 수집에 적용', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
-        right.bind('<Configure>', lambda e: self.mode_hint_label.configure(wraplength=max(px(200), e.width)))
+        ui.tip(self.depth_box, '사이트마다 검색 결과를 몇 쪽까지 볼지 정합니다. \'목록만\'·\'전체 수집\'에만 쓰입니다.')
 
         self._build_site_picker(card)
 
@@ -432,8 +440,9 @@ class App(tk.Tk):
         ttk.Button(buttons, text='문헌 결과 보기  →', style='Large.TButton', command=self.view, cursor='hand2').pack(side='right')
         self.reset_button = ttk.Button(buttons, text='↺ 검색 초기화', style='Link.TButton', command=self.reset_search, cursor='hand2')
         self.reset_button.pack(side='right', padx=(0, px(10)))
-        tk.Label(page, text='검색 결과는 \'임시 검색결과\'에 담기고 새 검색을 하면 바뀝니다. 남기고 싶으면 결과 창의 \'이 검색 저장\'이나 즐겨찾기를 쓰세요.',
-                 bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
+        ui.tip(self.start_button, '검색 결과는 \'임시 검색결과\'에 담기고, 끝나면 결과 창이 열립니다.\n새 검색을 하면 바뀌니 남기려면 결과 창의 \'이 검색 저장\'을 쓰세요.')
+        ui.tip(self.stop_button, '지금 받는 요청까지 끝내고 모은 것을 저장한 뒤 멈춥니다.')
+        ui.tip(self.reset_button, '연구 대상과 검색어 칸을 비웁니다.')
 
     def _build_site_picker(self, card):
         """검색 화면에서 바로 검색할 사이트를 고르는 체크 칸(자료원 연결 화면과 같은 선택을 함께 씁니다)."""
@@ -461,9 +470,9 @@ class App(tk.Tk):
                 check = ttk.Checkbutton(box, text=source.name, variable=self.source_vars[source.id],
                                         command=self.sources_changed, cursor='hand2')
                 check.grid(row=i // per_row, column=i % per_row + 1, sticky='w', padx=(0, px(10)), pady=(0, px(2)))
+                ui.tip(check, source.description + ('\n앱이 자료를 가져오지 않고, 체크해 두면 검색할 때 이 사이트 검색 화면을 브라우저로 엽니다.'
+                                                    if source.mode == 'official' else ''))
                 self.source_checks.append(check)
-        tk.Label(card, text='공식 사이트는 앱이 자료를 가져오지 않고, 체크해 두면 검색할 때 그 사이트 검색 화면을 브라우저로 엽니다.',
-                 bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w').pack(fill='x', pady=(px(6), 0))
 
     # ── 자료원 연결 ────────────────────────────────────────
 
@@ -473,8 +482,7 @@ class App(tk.Tk):
         for kind, label, note in (('full', '목록·본문 통합', '앱 안에서 본문까지'),
                                   ('catalog', '서지·요약 통합', '첫 화면 미리보기'),
                                   ('official', '공식 사이트 연결', '브라우저에서 열기')):
-            ui.badge(tools, label, kind).pack(side='left')
-            tk.Label(tools, text=note, bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(6), px(18)))
+            ui.tip(ui.badge(tools, label, kind), note).pack(side='left', padx=(0, px(10)))
         ttk.Button(tools, text='선택 해제', command=lambda: self.select_sources(False), cursor='hand2').pack(side='right')
         ttk.Button(tools, text='모두 선택', command=lambda: self.select_sources(True), cursor='hand2').pack(side='right', padx=(0, px(8)))
 
@@ -492,20 +500,11 @@ class App(tk.Tk):
                                     command=self.sources_changed, style='Source.TCheckbutton', cursor='hand2')
             check.grid(row=0, column=0, sticky='w')
             self.source_checks.append(check)
-            indent = px(26)
             ui.badge(box, badges[source.mode], source.mode).grid(row=0, column=1, sticky='e', padx=(px(10), px(6)))
             ttk.Button(box, text='공식 검색 ↗' if source.search_path else '사이트 열기 ↗', style='Quiet.TButton',
                        command=lambda key=source.id: self.open_source(key), cursor='hand2').grid(row=0, column=2, rowspan=2, sticky='e')
-            tk.Label(box, text=source.description, bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w',
-                     justify='left').grid(row=1, column=0, columnspan=2, sticky='w', padx=(indent, 0), pady=(px(2), 0))
-            if source.mode == 'official':
-                tk.Label(box, text='체크하면 통합 검색을 시작할 때 이 사이트의 검색 화면을 브라우저로 함께 엽니다.',
-                         bg=CARD, fg=ACCENT, font=ui.FONTS['small'], anchor='w', justify='left',
-                         wraplength=px(420)).grid(row=2, column=0, columnspan=3, sticky='w', padx=(indent, 0), pady=(px(4), 0))
-        tk.Label(page, text='공식 사이트 연결(규장각·신문아카이브·국가기록포털)은 앱이 자료를 직접 가져오지 않고, 체크해 두면 '
-                            '검색할 때 그 사이트 검색 화면을 열어 줍니다(기본은 꺼짐). 검색어는 첫 번째 줄을 쓰며 클립보드에도 복사합니다. '
-                            '규장각·국가기록포털은 홈페이지가 열리니 검색창에 붙여넣으세요. 서지 통합은 검색 첫 화면의 미리보기입니다.',
-                 bg=BG, fg=MUTED, font=ui.FONTS['small'], justify='left', wraplength=px(960)).pack(anchor='w', pady=(px(6), 0))
+            ui.tip(check, source.description + ('\n체크하면 통합 검색을 시작할 때 이 사이트의 검색 화면을 브라우저로 함께 엽니다.'
+                                                if source.mode == 'official' else ''))
 
     # ── 내 문헌 ────────────────────────────────────────────
 
@@ -517,7 +516,10 @@ class App(tk.Tk):
         text = tk.Frame(info, bg=CARD, width=px(200))
         text.pack(side='left', fill='x', expand=True)
         tk.Label(text, text='현재 보관함', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
-        self.library_path = tk.Label(text, textvariable=self.output, bg=CARD, fg=INK, font=ui.FONTS['label'],
+        self.output_label = tk.StringVar()
+        self.output.trace_add('write', lambda *a: self.output_label.set(place_name(self.output.get())))
+        self.output_label.set(place_name(self.output.get()))
+        self.library_path = tk.Label(text, textvariable=self.output_label, bg=CARD, fg=INK, font=ui.FONTS['label'],
                                      anchor='w', justify='left', wraplength=px(560))
         self.library_path.pack(anchor='w', fill='x', pady=(px(2), 0))
         text.bind('<Configure>', lambda e: self.library_path.configure(wraplength=max(px(200), e.width - px(4))))
@@ -534,7 +536,8 @@ class App(tk.Tk):
         self.recent.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
         self.recent.pack(side='left', fill='both', expand=True)
-        self.recent.bind('<Double-1>', lambda e: self.view())
+        self.recent.bind('<Double-1>', lambda e: self._open_recent())
+        self.recent.bind('<Return>', lambda e: self._open_recent())
         self.library_empty = tk.Label(table, bg=CARD, fg=MUTED, font=ui.FONTS['body'], justify='center',
                                       text='아직 이 보관함에 저장된 문헌이 없습니다.\n통합 검색을 실행하거나 기존 결과 폴더를 선택하세요.')
         self.library_empty.place(relx=0.5, rely=0.45, anchor='center')
@@ -549,6 +552,8 @@ class App(tk.Tk):
         e = ttk.Entry(tools, textvariable=self.fav_query, width=28)
         e.pack(side='left')
         self.fav_query.trace_add('write', lambda *a: self.refresh_bookmarks())
+        for key in ('<Return>', '<KP_Enter>', '<Down>'):
+            e.bind(key, self._fav_query_enter)   # Enter·↓: 찾은 첫 항목으로
         ttk.Button(tools, text='파일 폴더 열기', command=self._fav_open_dir, cursor='hand2').pack(side='right')
         ttk.Button(tools, text='이 분류 CSV로 내보내기', command=self._fav_export, cursor='hand2').pack(side='right', padx=(0, px(8)))
 
@@ -590,6 +595,7 @@ class App(tk.Tk):
         self.fav_items.bind('<<TreeviewSelect>>', lambda e: self._fav_show())
         self.fav_items.bind('<Double-1>', lambda e: self._fav_open_result())
         self.fav_items.bind('<Delete>', lambda e: self._fav_remove())
+        self.fav_items.bind('<Return>', lambda e: self._fav_open_result())   # Enter = 두 번 클릭(문헌 열기)
         self.fav_empty = tk.Label(table, bg=CARD, fg=MUTED, font=ui.FONTS['body'], justify='center',
                                   text='아직 즐겨찾기가 없습니다.\n문헌 결과 창에서 ☆ 즐겨찾기(F) 또는 본문을 끌어 선택한 뒤 ❝ 선택 부분 저장(Ctrl+S)을 누르세요.')
 
@@ -795,6 +801,16 @@ class App(tk.Tk):
             except OSError as exc:
                 messagebox.showerror('내보내기', str(exc), parent=self)
 
+    def _fav_query_enter(self, event=None):
+        items = self.fav_items.get_children()
+        if items:
+            self.fav_items.selection_set(items[0])
+            self.fav_items.focus(items[0])
+            self.fav_items.see(items[0])
+            self.fav_items.focus_set()
+            self.fav_items.event_generate('<<TreeviewSelect>>')
+        return 'break'
+
     def _fav_open_dir(self):
         try:
             self.bookmarks.dir.mkdir(parents=True, exist_ok=True)
@@ -915,12 +931,21 @@ class App(tk.Tk):
             with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1) as conn:
                 total = conn.execute('SELECT COUNT(*) FROM documents').fetchone()[0]
                 bodies = conn.execute("SELECT COUNT(*) FROM documents WHERE status='complete'").fetchone()[0]
-                rows = conn.execute('SELECT data,status FROM documents ORDER BY rowid DESC LIMIT 15').fetchall()
+                rows = conn.execute('SELECT data,status,key FROM documents ORDER BY rowid DESC LIMIT 15').fetchall()
             self.stats['records'].set(str(total))
             self.stats['bodies'].set(str(bodies))
             self._fill_recent(rows)
         except (sqlite3.Error, OSError, ValueError):
             return
+
+    def _open_recent(self):
+        """내 문헌 목록에서 고른 문헌을 결과 창에서 바로 엽니다."""
+        sel = self.recent.selection()
+        key = getattr(self, '_recent_keys', {}).get(sel[0]) if sel else None
+        self.view()
+        window = getattr(self, 'result_window', None)
+        if key and window is not None and window.winfo_exists():
+            window.after(100, lambda: window.focus_key(key))
 
     def _fill_recent(self, rows):
         if not hasattr(self, 'recent'):
@@ -928,13 +953,15 @@ class App(tk.Tk):
         for child in self.recent.get_children():
             self.recent.delete(child)
         labels = {'catalog': '서지·요약', 'complete': '본문 저장', 'pending': '본문 미수집', 'failed': '오류'}
-        for i, (data, status) in enumerate(rows):
+        self._recent_keys = {}
+        for i, (data, status, key) in enumerate(rows):
             try:
                 row = json.loads(data)
             except (TypeError, ValueError):
                 row = {}
-            self.recent.insert('', 'end', tags=('odd' if i % 2 else 'even',),
+            iid = self.recent.insert('', 'end', tags=('odd' if i % 2 else 'even',),
                                values=(row.get('title', '(제목 없음)'), row.get('source', ''), labels.get(status, status)))
+            self._recent_keys[iid] = key
         if rows:
             self.library_empty.place_forget()
         else:
@@ -1079,6 +1106,14 @@ class App(tk.Tk):
         self.state.set('대상 적용: ' + name + (' · 다른 이름·한자 표기 ' + ', '.join(extra) + ' 도 함께 찾습니다. 틀린 것은 검색어 칸에서 지우세요.'
                                               if extra else ' · 다른 이름이 있으면 검색어 칸에 한 줄씩 더하세요.')
                        + '  Enter를 한 번 더 누르면 검색을 시작합니다.')
+
+    def _focus_target(self, event=None):
+        """Ctrl+F: 통합 검색 화면의 연구 대상 칸으로."""
+        if self.current_page != 'search':
+            self.show_page('search')
+        self.target_entry.focus_set()
+        self.target_entry.select_range(0, 'end')
+        return 'break'
 
     def _target_enter(self, event=None):
         """연구 대상 칸의 Enter: 처음엔 대상 적용(검색어 채우기), 같은 대상에서 한 번 더 누르면 검색 시작."""
@@ -1480,14 +1515,17 @@ class App(tk.Tk):
             d = json.loads(report.read_text(encoding='utf-8'))
             prefix = '빠른 예비 검색' if d.get('quick') else '실행 종료'
             self.state.set(f"{prefix}: 문헌 {d.get('unique_records', 0)}건 · 서지 {d.get('catalog_count', 0)}건 · "
-                           f"본문 {d.get('downloaded', 0)}건 / 요청 {d.get('http_requests', '?')}회. 문헌 결과 보기에서 확인하세요.")
+                           f"본문 {d.get('downloaded', 0)}건 / 요청 {d.get('http_requests', '?')}회. 결과 창을 엽니다.")
         except (OSError, ValueError, AttributeError):
             self.state.set('실행이 종료되었습니다. 로그를 확인하세요.')
+        if getattr(self, '_close_after_stop', False):
+            self.destroy()
+            return
         window = getattr(self, 'result_window', None)
         if window is not None and window.winfo_exists() and Path(window.folder) == Path(self.active_out):
             window.reload()  # 열려 있는 결과 창에 새로 받은 본문을 바로 반영
-        if getattr(self, '_close_after_stop', False):
-            self.destroy()
+        elif any((Path(self.active_out) / n).exists() for n in ('collection.sqlite3', 'documents.jsonl')):
+            self.after(300, self.view)   # 검색이 끝나면 결과 창을 바로 엽니다(검색엔진처럼)
 
     def stop(self):
         if self.running:
