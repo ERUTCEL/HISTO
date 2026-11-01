@@ -261,8 +261,8 @@ class RelationsWindow(tk.Toplevel):
     """관계 후보 지도: 같은 문장에 함께 나온 표현을 잇습니다(관계의 종류는 뜻하지 않음).
     같은 데이터를 여러 모양으로 그립니다 — 원형 · 중심형 · 연결망 · 표 · 시간 흐름."""
 
-    STYLES = (('circle', '원형', '표현을 원 위에 놓고 함께 나온 짝을 잇습니다. 선이 굵을수록 근거 기록이 많습니다.'),
-              ('center', '중심형', '고른 표현을 가운데 두고, 함께 나온 기록이 많을수록 가까이 놓습니다. 다른 표현을 누르면 가운데가 바뀝니다.'),
+    STYLES = (('center', '중심형', '연구 대상을 가운데 두고, 함께 나온 기록이 많을수록 가까이 놓습니다. 선 위 숫자 = 함께 나온 기록 수. 다른 표현을 누르면 가운데가 바뀝니다.'),
+              ('circle', '원형', '표현을 원 위에 놓고 함께 나온 짝을 잇습니다. 선이 굵을수록 근거 기록이 많습니다.'),
               ('network', '연결망', '자주 함께 나오는 표현끼리 모이도록 배치합니다. 무리를 보기 좋습니다.'),
               ('matrix', '표', '표현 × 표현 표. 칸이 진할수록 함께 나온 기록이 많습니다. 칸을 누르면 근거를 봅니다.'),
               ('timeline', '시간 흐름', '연결마다 근거 기록이 어느 시기에 나오는지 연대 축 위에 점으로 보여 줍니다(연대가 있는 기록만).'))
@@ -290,10 +290,12 @@ class RelationsWindow(tk.Toplevel):
         self._year_of = year_of
         self._edge_ids = {}
         self._current = 0
-        self._center = names[0] if names else None
-        self.style_var = tk.StringVar(value=settings.get('relations_style', 'circle'))
+        # 가운데 = 연구 대상(이름이 점들 가운데 있으면), 아니면 가장 많이 나온 표현
+        aliases = {re.sub(r'\s+', '', x) for x in (getattr(parent, 'profile', None) or {}).get('direct_aliases') or []}
+        self._center = next((n for n in names if re.sub(r'\s+', '', n) in aliases), names[0] if names else None)
+        self.style_var = tk.StringVar(value=settings.get('relations_style', 'center'))
         if self.style_var.get() not in {k for k, _, _ in self.STYLES}:
-            self.style_var.set('circle')
+            self.style_var.set('center')
 
         head = tk.Frame(self, bg=CARD)
         head.pack(fill='x')
@@ -383,7 +385,10 @@ class RelationsWindow(tk.Toplevel):
             pos = {'center': self._layout_center, 'network': self._layout_network}.get(style, self._layout_circle)(width, height)
             edges = [(i, e) for i, e in enumerate(self.edges)
                      if self._visible(i) and (style != 'center' or self._center in e[0])]
-            self._draw_graph(pos, edges)
+            if style == 'center':   # 가운데와 이어지지 않은 표현은 숨김(헷갈리지 않게)
+                linked = {n for _, ((a, b), _) in edges for n in (a, b)} | {self._center}
+                pos = {n: p for n, p in pos.items() if n in linked}
+            self._draw_graph(pos, edges, numbers=style == 'center')
 
     def _visible(self, index):
         return self.kind_vars[self.kinds[index][0]].get()
@@ -402,7 +407,7 @@ class RelationsWindow(tk.Toplevel):
         for (a, b), ev in self.edges:
             if center in (a, b):
                 strength[b if a == center else a] += len(ev)
-        others = [n for n in self._names if n != center]
+        others = sorted((n for n in self._names if n != center), key=lambda n: -strength[n])
         top = max(strength.values()) if strength else 1
         cx, cy = width / 2, height / 2
         rmax = min(width / 2 - px(90), height / 2 - px(30))
@@ -447,9 +452,11 @@ class RelationsWindow(tk.Toplevel):
         sx = (width - px(200)) / ((x1 - x0) or 1); sy = (height - px(70)) / ((y1 - y0) or 1)
         return {name: (px(100) + (p[0] - x0) * sx, px(35) + (p[1] - y0) * sy) for name, p in pos.items()}
 
-    def _draw_graph(self, pos, edges):
+    def _draw_graph(self, pos, edges, numbers=False):
         c = self.canvas
         for index, (pair, evidence) in edges:
+            if pair[0] not in pos or pair[1] not in pos:
+                continue
             (x1, y1), (x2, y2) = pos[pair[0]], pos[pair[1]]
             tag = f'edge{index}'
             base = max(1, min(px(1) + len(evidence) // 2, px(7)))
@@ -458,6 +465,13 @@ class RelationsWindow(tk.Toplevel):
                                  dash=() if index == self._current or self.kinds[index][0] != rtypes.UNKNOWN else (4, 3),
                                  tags=(tag,))
             self._edge_ids[index] = line
+            if numbers:   # 선 위에 함께 나온 기록 수
+                mx, my = (x1 * 0.42 + x2 * 0.58), (y1 * 0.42 + y2 * 0.58)
+                t = c.create_text(mx, my, text=str(len(evidence)), fill=rtypes.COLORS[self.kinds[index][0]],
+                                  font=ui.FONTS['label_sm'], tags=(tag,))
+                bx = c.bbox(t)
+                c.tag_lower(c.create_oval(bx[0] - px(5), bx[1] - px(2), bx[2] + px(5), bx[3] + px(2), fill=CARD,
+                                          outline=rtypes.COLORS[self.kinds[index][0]], tags=(tag,)), t)
             c.tag_bind(tag, '<Button-1>', lambda event, i=index: self.show_edge(i))
             c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
             c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
@@ -517,50 +531,120 @@ class RelationsWindow(tk.Toplevel):
                     c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
 
     def _draw_timeline(self, width, height):
+        """시간 흐름: 행 = 연결(처음 나온 순), 열 = 시기. 칸 안 숫자 = 그 시기 근거 기록 수, 색 = 관계 종류, 진할수록 많음.
+        맨 위 '전체' 줄은 시기별 합계. 몇 건뿐인 아주 이른·늦은 기록은 '이전'·'이후' 칸에 모읍니다."""
         c = self.canvas
-        rows = [e for i, e in enumerate(self.edges) if self._visible(i)][:12]
-        years = [int(y) for _, ev in rows for rel in ev for y in [self._year_of.get(rel.get('record_key'))] if y]
-        if not years:
-            c.create_text(width / 2, height / 2, text='연대가 있는 근거 기록이 없습니다.', fill=MUTED, font=ui.FONTS['body'])
-            return
-        lo, hi = min(years), max(years)
-        if hi - lo < 10:
-            lo, hi = lo - 5, hi + 5
-        label_w = max(ui.FONTS['label_sm'].measure(f'{a} ↔ {b}') for (a, b), _ in rows) + px(20)
-        x0, x1 = label_w + px(16), width - px(30)
-        y0, row_h = px(20), (height - px(60)) / max(1, len(rows))
-        scale = lambda y: x0 + (y - lo) / (hi - lo) * (x1 - x0)
-        # 연대 눈금
-        step = next(s for s in (10, 20, 50, 100, 200, 500) if (hi - lo) / s <= 10)
-        for t in range((lo // step + 1) * step, hi + 1, step):
-            x = scale(t)
-            c.create_line(x, y0, x, height - px(35), fill='#EEE9DF')
-            c.create_text(x, height - px(22), text=str(t), fill=MUTED, font=ui.FONTS['small'])
-        for r, ((a, b), ev) in enumerate(rows):
-            index = self.edges.index(((a, b), ev))
-            y = y0 + (r + 0.5) * row_h
-            tag = f'row{index}'
-            color = ACCENT if index == self._current else '#8A93A0'
-            c.create_text(px(10), y, text=f'{a} ↔ {b}', anchor='w', fill=INK if index == self._current else MUTED,
-                          font=ui.FONTS['label_sm'], tags=(tag,))
-            c.create_line(x0, y, x1, y, fill='#F1EDE4', tags=(tag,))
-            bins, kinds_in = Counter(), {}
+        dated = []   # (연결 번호, 연도, 종류)
+        for i, ((a, b), ev) in enumerate(self.edges):
+            if not self._visible(i):
+                continue
             for rel in ev:
                 yr = self._year_of.get(rel.get('record_key'))
                 if yr:
-                    b = max(lo, min(hi, int(yr) // max(1, step // 5) * max(1, step // 5)))
-                    bins[b] += 1
-                    kinds_in.setdefault(b, Counter())[rel.get('_kind', rtypes.UNKNOWN)] += 1
-            for yr, n in bins.items():
-                rad = min(px(3) + n * px(1.5), row_h / 2 - px(2))
-                cx = scale(yr)
-                typed = {k: v for k, v in kinds_in[yr].items() if k != rtypes.UNKNOWN}
+                    dated.append((i, int(yr), rel.get('_kind', rtypes.UNKNOWN)))
+        if not dated:
+            c.create_text(width / 2, height / 2, text='연대가 있는 근거 기록이 없습니다.', fill=MUTED, font=ui.FONTS['body'])
+            return
+        years = sorted(y for _, y, _ in dated)
+        lo, hi = years[int(len(years) * 0.05)], years[min(len(years) - 1, int(len(years) * 0.95))]
+        span = max(1, hi - lo)
+        size = next(s_ for s_ in (5, 10, 20, 50, 100) if span / s_ <= 14)
+        start, stop = lo // size * size, hi // size * size
+        cols = [('before', f'{start} 이전')] if years[0] < start else []
+        cols += [(y, f'{y}') for y in range(start, stop + 1, size)]
+        if years[-1] >= stop + size:
+            cols.append(('after', f'{stop + size} 이후'))
+
+        def col_of(y):
+            if y < start:
+                return 'before'
+            if y >= stop + size:
+                return 'after'
+            return y // size * size
+        # 연결별·시기별 건수와 종류
+        cells = {}
+        first = {}
+        for i, y, kind in dated:
+            key = (i, col_of(y))
+            cells.setdefault(key, Counter())[kind] += 1
+            first[i] = min(first.get(i, y), y)
+        rows = sorted(first, key=lambda i: (first[i], -len(self.edges[i][1])))[:12]
+        total = Counter()
+        for (i, col), cnt in cells.items():
+            if i in rows:
+                total[col] += sum(cnt.values())
+        label_w = max(ui.FONTS['label_sm'].measure(f'{a} ↔ {b}') for (a, b), _ in (self.edges[i] for i in rows)) + px(38)
+        x0, top_y = label_w, px(40)
+        cw = (width - x0 - px(20)) / len(cols)
+        rh = min(px(30), (height - top_y - px(46)) / (len(rows) + 1.4))
+        top_count = max([sum(v.values()) for v in cells.values()] + [1])
+        self._tl_cells = {}
+        # 머리: 시기
+        unit = f'{size}년 단위'
+        c.create_text(px(10), top_y - px(18), text=f'시기 ({unit})', anchor='w', fill=MUTED, font=ui.FONTS['small'])
+        for j, (col, text) in enumerate(cols):
+            c.create_text(x0 + (j + 0.5) * cw, top_y - px(4), text=text, fill=MUTED, font=ui.FONTS['small'], anchor='s')
+
+        def cell(x, y, n, kind, tag, info):
+            shade = 0.15 + 0.85 * n / top_count   # 한 가지 색: 진할수록 많음(종류는 줄 앞 점으로)
+            fill = _blend('#FFFFFF', ACCENT, shade)
+            c.create_rectangle(x + 1, y + 1, x + cw - 1, y + rh - 1, fill=fill, outline='', tags=(tag,))
+            c.create_text(x + cw / 2, y + rh / 2, text=str(n), fill='white' if shade > 0.55 else INK,
+                          font=ui.FONTS['label_sm'], tags=(tag,))
+            self._tl_cells[tag] = info
+            c.tag_bind(tag, '<Enter>', lambda e, t=tag: self._tl_hover(e, t))
+            c.tag_bind(tag, '<Leave>', lambda e: (c.delete('tl_tip'), c.configure(cursor='')))
+
+        # 전체 줄: 막대(높을수록 그 시기 기록이 많음)
+        y = top_y
+        c.create_text(px(10), y + rh / 2, text='전체', anchor='w', fill=INK, font=ui.FONTS['label_sm'])
+        tmax = max(total.values()) if total else 1
+        for j, (col, text) in enumerate(cols):
+            if total[col]:
+                h = (rh - px(4)) * total[col] / tmax
+                c.create_rectangle(x0 + j * cw + cw * 0.2, y + rh - h, x0 + (j + 0.8) * cw, y + rh, fill='#C9C1B0', outline='')
+                c.create_text(x0 + (j + 0.5) * cw, y + rh / 2, text=str(total[col]), fill=INK, font=ui.FONTS['small'])
+        c.create_line(px(8), y + rh + px(3), x0 + len(cols) * cw, y + rh + px(3), fill=LINE)
+        # 연결 줄
+        for r, i in enumerate(rows):
+            (a, b), ev = self.edges[i]
+            y = top_y + (r + 1.3) * rh
+            current = i == self._current
+            c.create_text(px(10), y + rh / 2, text='●', anchor='w', fill=rtypes.COLORS[self.kinds[i][0]], font=ui.FONTS['small'])
+            c.create_text(px(24), y + rh / 2, text=f'{a} ↔ {b}', anchor='w', fill=INK if current else MUTED,
+                          font=ui.FONTS['label_sm'])
+            if current:
+                c.create_rectangle(px(4), y, x0 + len(cols) * cw, y + rh, outline=ACCENT, width=2)
+            for j, (col, text) in enumerate(cols):
+                cnt = cells.get((i, col))
+                if not cnt:
+                    continue
+                typed = {k: v for k, v in cnt.items() if k != rtypes.UNKNOWN}
                 kind = max(typed, key=typed.get) if typed else rtypes.UNKNOWN
-                c.create_oval(cx - rad, y - rad, cx + rad, y + rad, fill=rtypes.COLORS[kind],
-                              outline=INK if index == self._current else '', tags=(tag,))
-            c.tag_bind(tag, '<Button-1>', lambda e, i=index: self.show_edge(i))
-            c.tag_bind(tag, '<Enter>', lambda e: c.configure(cursor='hand2'))
-            c.tag_bind(tag, '<Leave>', lambda e: c.configure(cursor=''))
+                tag = f'tl{i}_{j}'
+                period = (None, start - 1) if col == 'before' else (stop + size, None) if col == 'after' else (col, col + size - 1)
+                cell(x0 + j * cw, y, sum(cnt.values()), kind, tag, (i, period, text, cnt))
+                c.tag_bind(tag, '<Button-1>', lambda e, i=i, p=period: self.show_edge(i, period=p))
+        c.create_text(px(10), height - px(12), anchor='w', fill=MUTED, font=ui.FONTS['small'],
+                      text='칸 숫자 = 그 시기에 함께 나온 기록 수(진할수록 많음) · 줄 앞 ● = 관계 종류 · 칸을 누르면 그 시기 기록만 아래에')
+
+    def _tl_hover(self, event, tag):
+        c = self.canvas
+        c.configure(cursor='hand2')
+        i, period, label, cnt = self._tl_cells[tag]
+        (a, b), _ = self.edges[i]
+        when = f'{period[0]}~{period[1]}년' if period[0] and period[1] else label
+        kinds = ' · '.join(f'{k} {v}' for k, v in cnt.most_common())
+        c.delete('tl_tip')
+        x, y = event.x + px(12), event.y + px(12)
+        t = c.create_text(x, y, text=f'{a} ↔ {b}\n{when} · {sum(cnt.values())}건\n{kinds}', anchor='nw',
+                          fill=INK, font=ui.FONTS['small'], tags=('tl_tip',))
+        x1, y1, x2, y2 = c.bbox(t)
+        if x2 > c.winfo_width() - 4:
+            c.move(t, -(x2 - x1) - px(24), 0)
+            x1, y1, x2, y2 = c.bbox(t)
+        r = c.create_rectangle(x1 - px(6), y1 - px(4), x2 + px(6), y2 + px(4), fill='#FFFDF5', outline=INK, tags=('tl_tip',))
+        c.tag_raise(t, r)
 
     def go_back(self):
         parent = self.master
@@ -571,9 +655,18 @@ class RelationsWindow(tk.Toplevel):
         except tk.TclError:
             pass
 
-    def _fill_evidence(self, index):
+    def _fill_evidence(self, index, period=None):
         self.evidence.delete('1.0', 'end')
         rels = sorted(self.edges[index][1], key=lambda r: r.get('_kind', rtypes.UNKNOWN) == rtypes.UNKNOWN)   # 종류 근거가 있는 기록 먼저
+        if period:
+            lo, hi = period
+
+            def inside(rel):
+                yr = self._year_of.get(rel.get('record_key'))
+                return bool(yr) and (lo is None or int(yr) >= lo) and (hi is None or int(yr) <= hi)
+            rels = [r for r in rels if inside(r)]
+            when = f'{lo}~{hi}년' if lo and hi else (f'{hi}년 이전' if hi else f'{lo}년 이후')
+            self.evidence.insert('end', f'{when} 기록 {len(rels)}건  (다른 시기까지 보려면 위 연결 목록에서 다시 고르세요)\n\n', 'note')
         for rel in rels[:30]:
             yr = self._year_of.get(rel.get('record_key'))
             kind, cue = rel.get('_kind', rtypes.UNKNOWN), rel.get('_cue', '')
@@ -581,12 +674,12 @@ class RelationsWindow(tk.Toplevel):
             self.evidence.insert('end', f"{rel['evidence']}\n", 'body')
             self.evidence.insert('end', f"{rel['url']}\n\n", 'link')
 
-    def show_edge(self, index):
+    def show_edge(self, index, period=None):
         if index is None or index < 0:
             return
         self._current = index
         self.edges_list.current(index)
-        self._fill_evidence(index)
+        self._fill_evidence(index, period)
         self._draw()
 
 
