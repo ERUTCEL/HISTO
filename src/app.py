@@ -416,6 +416,8 @@ class App(tk.Tk):
         tk.Label(depth, text=' 목록만 · 전체 수집에 적용', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left')
         right.bind('<Configure>', lambda e: self.mode_hint_label.configure(wraplength=max(px(200), e.width)))
 
+        self._build_site_picker(card)
+
         ui.hline(card).pack(fill='x', pady=(px(20), px(16)))
         pathrow = tk.Frame(card, bg=CARD)
         pathrow.pack(fill='x')
@@ -438,6 +440,36 @@ class App(tk.Tk):
         self.reset_button.pack(side='right', padx=(0, px(10)))
         tk.Label(page, text='검색 결과는 \'임시 검색결과\'에 담기고 새 검색을 하면 바뀝니다. 남기고 싶으면 결과 창의 \'이 검색 저장\'이나 즐겨찾기를 쓰세요.',
                  bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
+
+    def _build_site_picker(self, card):
+        """검색 화면에서 바로 검색할 사이트를 고르는 체크 칸(자료원 연결 화면과 같은 선택을 함께 씁니다)."""
+        ui.hline(card).pack(fill='x', pady=(px(20), px(14)))
+        head = tk.Frame(card, bg=CARD)
+        head.pack(fill='x')
+        tk.Label(head, text='검색할 사이트', bg=CARD, fg=INK, font=ui.FONTS['label']).pack(side='left')
+        ttk.Button(head, text='사이트 설명 →', style='Link.TButton', cursor='hand2',
+                   command=lambda: self.show_page('sources')).pack(side='right')
+        ttk.Button(head, text='모두 해제', style='Link.TButton', cursor='hand2',
+                   command=lambda: self.select_sources(False)).pack(side='right', padx=(0, px(8)))
+        ttk.Button(head, text='모두 선택', style='Link.TButton', cursor='hand2',
+                   command=lambda: self.select_sources(True)).pack(side='right', padx=(0, px(8)))
+        groups = (('앱에 모으기', [x for x in SOURCES if x.mode != 'official']),
+                  ('공식 사이트 함께 열기', [x for x in SOURCES if x.mode == 'official']))
+        per_row = 4
+        for title, items in groups:
+            box = tk.Frame(card, bg=CARD)
+            box.pack(fill='x', pady=(px(8), 0))
+            tk.Label(box, text=title, bg=CARD, fg=MUTED, font=ui.FONTS['small'], width=16, anchor='nw').grid(
+                row=0, column=0, rowspan=2, sticky='nw', pady=(px(2), 0))
+            for c in range(per_row):
+                box.columnconfigure(c + 1, weight=1, uniform='site')
+            for i, source in enumerate(items):
+                check = ttk.Checkbutton(box, text=source.name, variable=self.source_vars[source.id],
+                                        command=self.sources_changed, cursor='hand2')
+                check.grid(row=i // per_row, column=i % per_row + 1, sticky='w', padx=(0, px(10)), pady=(0, px(2)))
+                self.source_checks.append(check)
+        tk.Label(card, text='공식 사이트는 앱이 자료를 가져오지 않고, 체크해 두면 검색할 때 그 사이트 검색 화면을 브라우저로 엽니다.',
+                 bg=CARD, fg=MUTED, font=ui.FONTS['small'], anchor='w').pack(fill='x', pady=(px(6), 0))
 
     # ── 자료원 연결 ────────────────────────────────────────
 
