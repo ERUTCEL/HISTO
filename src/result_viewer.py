@@ -1364,6 +1364,10 @@ class ResultsWindow(tk.Toplevel):
             messagebox.showerror('원문 열기', str(exc), parent=self)
 
     def _saved_home(self):
+        """저장할 때 처음 열어 보여 줄 위치: 마지막으로 저장한 곳, 없으면 앱 옆 '저장한 검색'."""
+        last = settings.get('save_home')
+        if last and Path(last).is_dir():
+            return Path(last)
         home = getattr(self.master, 'saved_home', None)
         return Path(home) if home else self.folder.parent / '저장한 검색'
 
@@ -1375,9 +1379,21 @@ class ResultsWindow(tk.Toplevel):
         name = bm.clean_name(name or '')
         if not name:
             return
-        home = self._saved_home()
+        start = self._saved_home()
+        try:
+            start.mkdir(parents=True, exist_ok=True)   # 처음이면 기본 위치를 만들어 그곳부터 보여 줌
+        except OSError:
+            start = self.folder.parent
+        chosen = filedialog.askdirectory(parent=self, title=f'「{name}」을(를) 저장할 위치 고르기', initialdir=str(start))
+        if not chosen:
+            return
+        home = Path(chosen)
+        settings.save(save_home=str(home.resolve()))
         dest = home / name
         if dest.resolve() == self.folder:
+            return
+        if self.folder in dest.resolve().parents:
+            messagebox.showerror('이 검색 저장', '지금 보는 검색 결과 폴더 안에는 저장할 수 없습니다. 다른 위치를 고르세요.', parent=self)
             return
         if dest.exists():
             if not messagebox.askyesno('이 검색 저장', f'「{name}」이(가) 이미 있습니다. 덮어쓸까요?', parent=self):

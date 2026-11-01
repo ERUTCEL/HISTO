@@ -418,14 +418,7 @@ class App(tk.Tk):
 
         self._build_site_picker(card)
 
-        ui.hline(card).pack(fill='x', pady=(px(20), px(16)))
-        pathrow = tk.Frame(card, bg=CARD)
-        pathrow.pack(fill='x')
-        tk.Label(pathrow, text='저장 위치', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(10)))
-        self.output_entry = ttk.Entry(pathrow, textvariable=self.output)
-        self.output_entry.pack(side='left', fill='x', expand=True)
-        self.choose_button = ttk.Button(pathrow, text='폴더 변경', command=self.choose, cursor='hand2')
-        self.choose_button.pack(side='left', padx=(px(8), 0))
+        # 저장 위치는 여기서 고르지 않습니다: 검색 결과는 '임시 검색결과'에 담기고, 결과 창의 '이 검색 저장'에서 위치를 묻습니다.
 
         buttons = tk.Frame(page, bg=BG)
         buttons.pack(fill='x', pady=(px(16), px(10)))
@@ -1117,8 +1110,7 @@ class App(tk.Tk):
 
     def _set_inputs(self, enabled):
         state = 'normal' if enabled else 'disabled'
-        for widget in (self.start_button, self.output_entry, self.choose_button, self.target_entry, self.target_button,
-                       self.reset_button):
+        for widget in (self.start_button, self.target_entry, self.target_button, self.reset_button):
             widget.configure(state=state)
         for b in self.mode_buttons:
             b.configure(state=state)
