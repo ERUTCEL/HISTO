@@ -25,8 +25,9 @@ _TOKEN = re.compile(r'[가-힣]+|[㐀-鿿豈-﫿]+|[A-Za-z]{2,}')
 _HANJA = re.compile(r'[㐀-鿿豈-﫿]')
 _ENDINGS = sorted('''은 는 이 가 을 를 의 에 에게 에서 으로 로 와 과 도 만 께서 께 이라 라 이며 며 이고 고
 하였다 하였으니 하였는데 하였고 하니 하고 하여 하며 하는 하게 하기를 하기 한다 했다 하다 이다 였다 이었다 입니다
-들 들은 들이 들을 들의 에는 에도 으로써 로써 부터 까지 처럼 보다 이나 나 이요 요'''.split(), key=len, reverse=True)
-STOP = set('''것 수 등 및 그 이 저 그것 이것 때 중 더 또 또한 위 아래 하다 있다 없다 되다 하였다 아니다 이다 여 왈 曰 之 而 也 於 以 其 者 爲 則 不 有 無 乎'''.split())
+들 들은 들이 들을 들의 에는 에도 으로써 로써 부터 까지 처럼 보다 이나 나 이요 요 인 이자'''.split(), key=len, reverse=True)
+STOP = set('''것 수 등 및 그 이 저 그것 이것 때 중 더 또 또한 위 아래 하다 있다 없다 되다 하였다 아니다 이다 여 왈 曰 之 而 也 於 以 其 者 爲 則 不 有 無 乎
+까지 부터 처럼 보다 에서 에게 으로 로서 뒤의 앞의 위의 때의 후의 이후 이전 당시 그의 그는 의해 인해 등이 등을 등은 에의'''.split())
 
 
 def _strip(word):
@@ -36,9 +37,19 @@ def _strip(word):
     return word
 
 
+_SPACED_HANJA = re.compile(r'(?<=[\u3400-\u9fff\uf900-\ufaff])\s+(?=[\u3400-\u9fff\uf900-\ufaff])')
+_SPACED_HANGUL = re.compile(r'(?<![가-힣])[가-힣](?:\s[가-힣])+(?![가-힣])')
+
+
+def normalize(text):
+    """검색 강조로 한 글자씩 띄어진 글을 잇습니다: '張 禧 嬪' → '張禧嬪', '숙 빈' → '숙빈'."""
+    text = _SPACED_HANJA.sub('', text or '')
+    return _SPACED_HANGUL.sub(lambda m: m.group().replace(' ', ''), text)
+
+
 def tokens(text):
     out = []
-    for m in _TOKEN.finditer(text or ''):
+    for m in _TOKEN.finditer(normalize(text)):
         t = m.group()
         if _HANJA.match(t):
             if len(t) <= 2:
@@ -249,20 +260,27 @@ class WordSpace:
 
 # ── 4강: 문맥별 용례 ────────────────────────────────────────
 
-def concordance(rows, term, width=36, limit=400):
-    """용어가 나온 자리마다 (문헌 키, 왼쪽 문맥, 용어, 오른쪽 문맥)."""
+def any_regex(words):
+    """여러 표기 가운데 하나(띄어쓰기 무시, 긴 것 먼저): ['사사', '賜死']."""
+    pats = [r'\s*'.join(re.escape(c) for c in w if not c.isspace())
+            for w in sorted({w for w in words if w and w.strip()}, key=lambda w: -len(w))]
+    pats = [p for p in pats if p]
+    return re.compile('|'.join(pats)) if pats else None
+
+
+def concordance(rows, term, width=36, limit=400, alts=()):
+    """용어(와 같은 뜻의 다른 표기)가 나온 자리마다 (문헌 키, 왼쪽 문맥, 찾은 말, 오른쪽 문맥)."""
     hits = []
-    if not term:
+    rx = any_regex([term, *alts]) if term else None
+    if rx is None:
         return hits
     for r in rows:
         text = doc_text(r, body_chars=20000).replace('\n', ' ')
-        start = 0
-        while len(hits) < limit:
-            i = text.find(term, start)
-            if i < 0:
-                break
-            hits.append((r.get('key'), text[max(0, i - width):i], term, text[i + len(term):i + len(term) + width]))
-            start = i + len(term)
+        for m in rx.finditer(text):
+            if len(hits) >= limit:
+                return hits
+            i, j = m.start(), m.end()
+            hits.append((r.get('key'), text[max(0, i - width):i], m.group(), text[j:j + width]))
     return hits
 
 
@@ -662,6 +680,22 @@ def _verdict(n_ab, score):
     return '관련이 약합니다(우연히 겹치는 정도)'
 
 
+def clean_related(items, word, alts=()):
+    """관련 깊은 말 목록에서 뺄 것: 찾는 말 자신과 그 다른 표기의 조각(張禧嬪의 '張禧', 경종의 '景宗'),
+    '-다'로 끝나는 동사·형용사(되었다·막다). items: [(낱말, 값)]"""
+    own = [re.sub(r'\s+', '', x) for x in [word, *alts] if x]
+    out = []
+    for t, v in items:
+        if any(t in o or o in t for o in own):
+            continue
+        if re.fullmatch(r'[가-힣]+다', t):
+            continue
+        if re.fullmatch(r'[가-힣][에고게어음지서며]', t):   # 년에·집에·받고·크게·작음 같은 조각
+            continue
+        out.append((t, v))
+    return out
+
+
 def fuse_related(assoc, near, n=15, k=8):
     """'자주 함께 나온 말'과 '비슷한 맥락에서 쓰이는 말' 순위를 합칩니다(순위 융합).
     → [(낱말, 점수 0~100, 근거)]"""
@@ -679,7 +713,7 @@ def fuse_related(assoc, near, n=15, k=8):
     return [(w, round(score[w] / top * 100), label(how[w])) for w in out]
 
 
-def relate(rows, words, wordspace=None, examples=60, idf=None):
+def relate(rows, words, wordspace=None, examples=60, idf=None, equivalents=None):
     """두세 낱말의 관계를 셉니다.
 
     - 각 낱말이 나온 문헌 수, 둘(셋)이 함께 나온 문헌 수
@@ -689,7 +723,8 @@ def relate(rows, words, wordspace=None, examples=60, idf=None):
     - 둘 다와 자주 같이 나오는 말, 시대별 함께 나온 문헌 수, 함께 나온 문장 예시
     """
     words = [w.strip() for w in words if w and w.strip()]
-    rx = {w: _word_regex(w) for w in words}
+    equivalents = equivalents or {}
+    rx = {w: any_regex([w, *equivalents.get(w, ())]) for w in words}   # 다른 표기(張禧嬪·賜死)도 같은 낱말로
     n_docs = len(rows)
     docs = {w: set() for w in words}
     pairs = [(a, b) for i, a in enumerate(words) for b in words[i + 1:]]

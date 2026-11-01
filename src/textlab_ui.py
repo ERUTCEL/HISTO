@@ -4,6 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import aliases
 import mtl
 import settings
 import textlab as tl
@@ -157,14 +158,27 @@ class TextLabWindow(tk.Toplevel):
         _note(page, '두 번 클릭하면 결과 창에서 그 문헌을 엽니다.').pack(anchor='w', pady=(px(6), 0))
         self._search_keys = []
 
+    def _equivalents(self, word):
+        """같은 뜻의 다른 표기(장희빈 → 張禧嬪·희빈 장씨, 사사 → 賜死). 한 번 찾은 것은 기억."""
+        cache = self.__dict__.setdefault('_equiv_cache', {})
+        if word not in cache:
+            cache[word] = aliases.equivalents(word, self.results.rows, self.results.profile)
+        return cache[word]
+
     def search(self):
         text = self.search_var.get().strip()
         if not text:
             return
         index = self.results.ensure_index()
-        q = index.vector(text)
-        hits = index.search(text, 200)
-        self.search_title.set(f'「{text}」와 비슷한 문헌 {len(hits)}건')
+        # 같은 뜻의 다른 표기도 함께 찾기: 칸 전체가 이름이면 그 이름의 다른 표기, 아니면 낱말마다
+        extra = self._equivalents(text) if ' ' in text else []
+        if not extra:
+            extra = [e for w in text.split() for e in self._equivalents(w)]
+        query = ' '.join([text] + extra)
+        q = index.vector(query)
+        hits = index.search(query, 200)
+        also = f"  (다른 표기도 함께: {' · '.join(extra[:6])})" if extra else ''
+        self.search_title.set(f'「{text}」와 비슷한 문헌 {len(hits)}건{also}')
         self._show_hits(hits, q)
 
     def similar(self, key):
@@ -334,19 +348,21 @@ class TextLabWindow(tk.Toplevel):
 
         def work():
             ws = space or tl.WordSpace(rows, vocab_size=1500, k=32)
+            equiv = {w: self._equivalents(w) for w in words}   # 다른 표기(張禧嬪·賜死)도 같은 낱말로 셉니다
             if len(words) >= 2:
-                return ws, 'relate', tl.relate(rows, words, ws, idf=index.idf)
+                return ws, 'relate', tl.relate(rows, words, ws, idf=index.idf, equivalents=equiv)
             w = words[0]
-            rx = tl._word_regex(w)
+            rx = tl.any_regex([w, *equiv[w]])
             docs = sum(1 for r in rows if rx and rx.search(tl.doc_text(r, body_chars=30000)))
-            hits = tl.concordance(rows, w, limit=400)
+            hits = tl.concordance(rows, w, limit=400, alts=equiv[w])
             groups, labels = tl.usage_clusters(hits, index.idf) if hits else ([], [])
             found = ws.lookup(w)
-            return ws, 'word', {'word': w, 'docs': docs, 'n_docs': len(rows), 'found': found,
+            return ws, 'word', {'word': w, 'docs': docs, 'n_docs': len(rows), 'found': found, 'alts': equiv[w],
                                 # 거의 모든 문헌에 나오는 흔한 말(idf에 없음)은 빼고 넉넉히 뽑아 둡니다
-                                'near': [x for x in (ws.neighbors(w, 40) if found else []) if x[0] in index.idf][:15],
-                                'assoc': [x for x in ws.associations(w, None if period == '전체' else period, 40)
-                                          if x[0] in index.idf][:15],
+                                'near': tl.clean_related([x for x in (ws.neighbors(w, 60) if found else []) if x[0] in index.idf],
+                                                         w, equiv[w])[:15],
+                                'assoc': tl.clean_related([x for x in ws.associations(w, None if period == '전체' else period, 60)
+                                                           if x[0] in index.idf], w, equiv[w])[:15],
                                 'hits': hits, 'groups': groups, 'labels': labels, 'period': period}
 
         def done(value):
@@ -370,6 +386,8 @@ class TextLabWindow(tk.Toplevel):
         t.insert('end', f"  나온 문헌 {res['docs']:,}건", 'big')
         t.insert('end', f"  (전체 {res['n_docs']:,}건 중 {res['docs'] / max(1, res['n_docs']) * 100:.0f}%) · 나온 자리 {len(res['hits']):,}곳"
                         + ('' if len(res['hits']) < 400 else ' 이상') + '\n', 'muted')
+        if res.get('alts'):
+            t.insert('end', f"  다른 표기도 함께 셈: {' · '.join(res['alts'][:6])}\n", 'muted')
 
         def chips(items, fmt):
             t.insert('end', '  ')

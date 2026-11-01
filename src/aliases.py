@@ -150,3 +150,62 @@ def add_hanja_aliases(profile, rows):
     if added:
         profile['direct_aliases'] = names + added
     return added
+
+
+# ── 낱말의 다른 표기(텍스트 분석·비슷한 문헌 찾기에서 함께 찾기) ─────────────
+_by_hanja = None
+
+
+def _readings():
+    """한자 한 글자 → 한글 음들."""
+    global _by_hanja
+    if _by_hanja is None:
+        hanja_input._load()
+        rev = {}
+        for syl, items in (hanja_input._singles or {}).items():
+            if len(syl) == 1:
+                for h, _ in items:
+                    rev.setdefault(h, set()).add(syl)
+        _by_hanja = rev
+    return _by_hanja
+
+
+def korean_from_texts(hanja, records, limit=1):
+    """한자 낱말 → 문헌에 함께 쓰인 한글 음(賜死 → 사사). 규칙은 hanja_from_texts와 같음:
+    2번 이상 나오고, 같은 기록 안에 그 한자와 함께 나온 적이 있어야 합니다."""
+    word = re.sub(r'\s+', '', hanja or '')
+    if not 2 <= len(word) <= 6 or not all('\u3400' <= c <= '\u9fff' or '\uf900' <= c <= '\ufaff' for c in word):
+        return []
+    rd = _readings()
+    options = ['']
+    for ch in word:
+        sy = sorted(rd.get(ch, ()))[:6]
+        if not sy:
+            return []
+        options = [o + x for o in options for x in sy][:200]
+    count, together = collections.Counter(), collections.Counter()
+    for parts in records:
+        s = re.sub(r'\s+', '', '|'.join(str(p or '') for p in parts))
+        here = [o for o in options if o in s]
+        count.update(here)
+        if word in s:
+            together.update(here)
+    ok = [k for k, c in count.most_common() if c >= 2 and together[k] >= 1]
+    return ok[:limit]
+
+
+def equivalents(word, rows, profile=None):
+    """찾는 낱말과 같은 뜻으로 쓰인 다른 표기들(자기 자신 제외).
+    - 연구 대상의 이름이면: 다른 이름·한자 표기(장희빈 → 희빈 장씨·張禧嬪·禧嬪張氏)
+    - 한글 낱말이면: 문헌에서 음이 맞고 함께 쓰인 한자(사사 → 賜死)
+    - 한자 낱말이면: 문헌에서 함께 쓰인 한글 음(賜死 → 사사)"""
+    w = re.sub(r'\s+', '', word or '')
+    if not w:
+        return []
+    names = [x for x in ((profile or {}).get('direct_aliases') or [])]
+    if w in {re.sub(r'\s+', '', x) for x in names}:
+        return [x for x in names if re.sub(r'\s+', '', x) != w]
+    records = [(r.get('title'), r.get('snippet'), str(r.get('body') or '')[:3000]) for r in rows]
+    if all('가' <= c <= '힣' for c in w):
+        return hanja_from_texts(w, records)
+    return korean_from_texts(w, records)
