@@ -204,6 +204,7 @@ def read_results(folder, profile=None):
         period.fill_year(row)   # 연대가 비어 있으면 사이트 번호에서 읽어 채움(표시용, 점수에는 쓰지 않음)
         row['_search'] = '\n'.join([str(row.get('title') or ''), str(row.get('body') or ''),
                                     str(row.get('snippet') or ''), str(row.get('source') or '')]).casefold()
+        row['_search_c'] = re.sub(r'\s+', '', row['_search'])   # 찾기용: 띄어쓰기를 지운 글(宋 時 烈 = 宋時烈)
     # 시대 가중치: 대상의 큰 시대(고대·고려·조선·근대·일제강점기·현대)와 다른 시대의 기록은 낮춤.
     # 대상 시대는 직접 고른 값(설정 '대상 시대')이 있으면 그것, 없으면 자동(period.target_era: 확실할 때만, 이웃한 두 시대일 수 있음)
     choice = profile.get('era_choice')
@@ -651,6 +652,42 @@ class ResultsWindow(tk.Toplevel):
             self.more_panel.pack_forget()
             self.more_toggle.configure(text='분류 ▸')
 
+    def _query_groups(self):
+        """찾기 칸 → 낱말 묶음들. 띄어 쓴 낱말은 모두 들어 있어야 하고(띄어쓰기 무시),
+        연구 대상의 이름(다른 이름·한자 표기 포함)을 치면 그 이름들 가운데 하나만 있어도 됩니다.
+        예: '숙종 희빈' → 숙종 AND 희빈 / '장희빈' → 장희빈·희빈장씨·張禧嬪·禧嬪張氏 중 하나"""
+        words = [re.sub(r'\s+', '', w) for w in self.query.get().casefold().split()]
+        names = [re.sub(r'\s+', '', x).casefold() for x in (self.profile or {}).get('direct_aliases') or []]
+        names = [x for x in names if x]
+        whole = ''.join(words)
+        if whole in names and len(names) > 1:   # '희빈 장씨'처럼 띄어 쓴 이름 전체
+            return [set(names)], True
+        groups, expanded = [], False
+        for w in words:
+            if not w:
+                continue
+            if w in names and len(names) > 1:
+                groups.append(set(names))
+                expanded = True
+            else:
+                groups.append({w})
+        return groups, expanded
+
+    def _query_terms(self):
+        """본문 노란 표시에 쓸 낱말(찾기 칸의 낱말과 넓혀 찾은 다른 이름)."""
+        groups, _ = self._query_groups()
+        return [t for g in groups for t in g]
+
+    def _find_text(self):
+        if not self.query.get().strip():
+            return ''
+        text = f'{len(self.filtered)}건'
+        if getattr(self, '_query_expanded', False):
+            text += ' · 다른 이름 포함'
+        if self.priority_keys and self.only_priority.get():
+            text += f' · 우선 {len(self.priority_keys)}건 안에서'
+        return text
+
     def _focus_query(self, event=None):
         self.query_entry.focus_set()
         self.query_entry.select_range(0, 'end')
@@ -673,7 +710,7 @@ class ResultsWindow(tk.Toplevel):
         self._see_first_hit()
         self.tree.focus_set()
         q = self.query.get().strip()
-        self.find_msg.set(f"{len(self.filtered)}건" if q else '')
+        self.find_msg.set(self._find_text())
         return 'break'
 
     def _query_to_list(self, event=None):
@@ -803,6 +840,7 @@ class ResultsWindow(tk.Toplevel):
         self._timer = None
         keep = {r.get('key') for r in self.selected()}  # 새로고침·필터 후에도 보던 문헌 선택 유지
         query = self.query.get().casefold().strip()
+        groups, self._query_expanded = self._query_groups()
         minimum = {'전체 후보': -10000, '60점 이상': 60, '80점 이상': 80}[self.threshold.get()]
         facet, decade, source = self.facet.get(), self.period.get(), self.source_filter.get()
         wanted = None
@@ -825,7 +863,7 @@ class ResultsWindow(tk.Toplevel):
                     continue
             if decade != '모든 연대' and a['period'] != decade:
                 continue
-            if query and query not in row.get('_search', ''):
+            if groups and not all(any(g in row.get('_search_c', '') for g in group) for group in groups):
                 continue
             if self.priority_keys and self.only_priority.get() and row.get('key') not in self.priority_keys:
                 continue
@@ -857,7 +895,7 @@ class ResultsWindow(tk.Toplevel):
         if found:
             prio += '  ·  사료의 한자 이름도 찾음: ' + ' · '.join(found)
         if hasattr(self, 'find_msg'):
-            self.find_msg.set(f'{len(self.filtered)}건' if self.query.get().strip() else '')
+            self.find_msg.set(self._find_text())
         where = ('임시 검색결과(저장 안 함)' if self.folder.name == '임시 검색결과' else self.folder.name)
         self.info.set(f'{where}  ·  {len(self.filtered)} / {len(self.rows)}건  ⓘ')
         self.info_detail = '\n'.join(x.strip() for x in (prio + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
@@ -1298,8 +1336,7 @@ class ResultsWindow(tk.Toplevel):
     def _highlight_terms(self, row):
         for tag in ('hit', 'hit_small', 'hit_bg'):
             self.detail.tag_remove(tag, '1.0', 'end')
-        extra = self.query.get().strip()
-        rx = _terms_regex(self.hl_terms + ([extra] if len(extra) >= 2 else []))
+        rx = _terms_regex(self.hl_terms + [t for t in self._query_terms() if len(t) >= 2])
         if rx is None:
             return
         text = self.detail.get('1.0', 'end-1c')
