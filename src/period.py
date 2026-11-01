@@ -77,39 +77,36 @@ def _direct(r):
     return any('직접명칭' in x for x in r['analysis'].get('score_reasons', []))
 
 
-ERA_MIN_RECORDS = 10    # 이름이 직접 나오는 사료가 이보다 적으면 판단하지 않음(보류)
-ERA_EARLY_SHARE = 0.2   # '가장 이른 시대'로 인정하려면 직접 언급 사료의 20% 이상
-
-
 def target_era(rows, other_kind=lambda r: None):
-    """대상의 시대(또는 이웃한 두 시대)를 정합니다. 확실하지 않으면 None(보류).
-
-    근거: 대상 이름이 직접 나오는 사료(연구·해설·문예 서술 제외)의 시대.
-    연대가 있으면 연대로, 없으면 어느 시대의 사서인지로(삼국사기→고대, 고려사→고려) 셉니다.
-      ① 가장 많이 나온 시대
-      ② 직접 언급의 20% 이상이 나온 가장 이른 시대(몇 건뿐인 동명이인·음만 같은 말에 끌려가지 않게)
-    ①과 ②가 같으면 그 시대, 이웃한 두 시대면 두 시대 모두(생애가 걸친 인물: 정몽주 고려~조선),
-    두 시대 이상 떨어지거나 직접 언급이 10건 미만이면 보류합니다.
-    기준(20%·10건)은 33개 대상으로 정하고, 정할 때 쓰지 않은 새 대상 15개로 따로 확인했습니다.
-    → ((시작 시대, 끝 시대) 또는 None, 후보 시대들)"""
-    count = collections.Counter()
+    """대상의 시대를 두 가지 방법으로 따로 추정해, 둘이 같을 때만 확정합니다(아니면 None = 보류).
+    ① 대상 이름이 직접 나오는 사료 가운데 연대가 있는 기록이 가장 많은 시대(3건 이상)
+    ② 사서의 시대(삼국사기→고대, 고려사→고려)·연표까지 근거로, 2건 이상 나오는 가장 이른 시대
+    → ((시대, 시대) 또는 None, 후보 시대들).
+    새 규칙(사서 시대까지 세고 '가장 이른 시대'를 20% 이상으로)을 시험했지만, 정할 때 쓰지 않은 새 대상 15개에서
+    틀린 판단이 1 → 3건으로 늘어(서희·원효: 후대에 많이 언급된 인물) 쓰지 않았습니다."""
+    first = collections.Counter()
+    second = collections.Counter()
     for r in rows:
-        if not _direct(r) or other_kind(r):
+        if not _direct(r):
             continue
-        e = era_hint(r)
-        if e is not None:
-            count[e] += 1
-    total = sum(count.values())
-    if not count:
-        return None, []
-    mode = max(sorted(count), key=lambda e: count[e])
-    early = next((e for e in sorted(count) if count[e] >= 2 and count[e] >= ERA_EARLY_SHARE * total), None)
-    if total < ERA_MIN_RECORDS:
-        return None, []   # 근거가 적으면 후보도 내지 않음(몇 건뿐인 후보는 오해를 부름)
-    candidates = sorted({e for e in (mode, early) if e is not None})
-    if early is None or abs(mode - early) > 1:
-        return None, candidates
-    return (min(mode, early), max(mode, early)), candidates
+        a = r['analysis']
+        kind = other_kind(r)
+        y = a.get('year')
+        if y and not kind and a['score'] >= 60:
+            try:
+                first[era_of(y)] += 1
+            except (TypeError, ValueError):
+                pass
+        if not kind or '연표' in str(r.get('source') or ''):
+            e = era_hint(r)
+            if e is not None:
+                second[e] += 1
+    one = first.most_common(1)[0][0] if first and first.most_common(1)[0][1] >= 3 else None
+    two = next((e for e in sorted(second) if second[e] >= 2), None)
+    candidates = sorted({e for e in (one, two) if e is not None})
+    if one is not None and one == two:
+        return (one, one), candidates
+    return None, candidates
 
 
 def era_label(era):
