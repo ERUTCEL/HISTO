@@ -365,11 +365,12 @@ class App(tk.Tk):
         row.pack(fill='x', pady=(px(8), px(6)))
         self.target_entry = ttk.Entry(row, textvariable=self.target, font=ui.FONTS['input_lg'], style='Large.TEntry')
         self.target_entry.pack(side='left', fill='x', expand=True)
-        self.target_entry.bind('<Return>', lambda e: self.apply_target())
+        self.target_entry.bind('<Return>', self._target_enter)
+        self.target_entry.bind('<KP_Enter>', self._target_enter)
         ui.placeholder(self.target_entry, '인물·사건·제도 이름  (예: 숙빈 최씨, 대동법, 장희빈)', variable=self.target)
         self.target_button = ttk.Button(row, text='대상 적용', style='Outline.TButton', command=self.apply_target, cursor='hand2')
         self.target_button.pack(side='left', fill='y', padx=(px(10), 0))
-        tk.Label(card, text='인물·사건·제도 이름을 입력하면 알려진 별칭을 검색어에 채웁니다.', bg=CARD, fg=MUTED,
+        tk.Label(card, text='인물·사건·제도 이름을 입력하고 Enter를 누르면 별칭을 검색어에 채웁니다. 한 번 더 Enter를 누르면 검색을 시작합니다.', bg=CARD, fg=MUTED,
                  font=ui.FONTS['small']).pack(anchor='w')
 
         cols = tk.Frame(card, bg=CARD)
@@ -1074,8 +1075,22 @@ class App(tk.Tk):
         self.terms.delete('1.0', 'end')
         self.terms.insert('1.0', '\n'.join(terms))
         extra = [t for t in terms if t != name]
+        self._applied_name = name
         self.state.set('대상 적용: ' + name + (' · 다른 이름·한자 표기 ' + ', '.join(extra) + ' 도 함께 찾습니다. 틀린 것은 검색어 칸에서 지우세요.'
-                                              if extra else ' · 다른 이름이 있으면 검색어 칸에 한 줄씩 더하세요.'))
+                                              if extra else ' · 다른 이름이 있으면 검색어 칸에 한 줄씩 더하세요.')
+                       + '  Enter를 한 번 더 누르면 검색을 시작합니다.')
+
+    def _target_enter(self, event=None):
+        """연구 대상 칸의 Enter: 처음엔 대상 적용(검색어 채우기), 같은 대상에서 한 번 더 누르면 검색 시작."""
+        if self.running:
+            return 'break'
+        name = self.target.get().strip()
+        has_terms = bool(self.terms.get('1.0', 'end').strip())
+        if name and name == getattr(self, '_applied_name', None) and has_terms:
+            self.start()
+        else:
+            self.apply_target()
+        return 'break'
 
     @staticmethod
     def _is_default_target(name):
