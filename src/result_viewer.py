@@ -474,12 +474,13 @@ class ResultsWindow(tk.Toplevel):
         ttk.Button(buttons, text='비슷한 문헌', style='Large.TButton', cursor='hand2',
                    command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left', padx=(px(8), 0))
         ttk.Button(buttons, text='텍스트 분석', style='Outline.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+        ttk.Button(buttons, text='관계도', style='Large.TButton', cursor='hand2',
+                   command=lambda: RelationsWindow(self, self.filtered)).pack(side='left', padx=(px(8), 0))
         # 덜 쓰는 기능은 한곳에 모아 버튼 줄을 짧게
         more = tk.Menu(self, tearoff=0)
         more.add_command(label='새로고침  (F5)', command=self.reload)
         more.add_command(label='원문 주소 복사', command=self.copy_url)
         more.add_command(label='파일 폴더 열기', command=self.open_folder)
-        more.add_command(label='관계 후보 지도', command=lambda: RelationsWindow(self, self.filtered))
         more.add_command(label='추천 성능 보기', command=lambda: PerformanceWindow(self))
         more_btn = ttk.Button(buttons, text='더 보기 ▾', style='Large.TButton', cursor='hand2')
         more_btn.configure(command=lambda: more.tk_popup(more_btn.winfo_rootx(), more_btn.winfo_rooty() + more_btn.winfo_height()))
@@ -608,7 +609,8 @@ class ResultsWindow(tk.Toplevel):
         '공식 원문 ↗': '고른 문헌의 원문 사이트를 브라우저로 엽니다.',
         '비슷한 문헌': '고른 문헌과 내용이 비슷한 문헌을 찾습니다.',
         '텍스트 분석': '비슷한 문헌 찾기 · 낱말 살펴보기 · 자동 분류',
-        '더 보기 ▾': '새로고침(F5) · 원문 주소 복사 · 파일 폴더 열기 · 관계 후보 지도 · 추천 성능',
+        '더 보기 ▾': '새로고침(F5) · 원문 주소 복사 · 파일 폴더 열기 · 추천 성능',
+        '관계도': '지금 목록에 보이는 문헌에서 인물·장소·관청 등이 함께 나오는 관계를 지도로 봅니다(관계 후보 지도).',
         '이 검색 저장': '지금 결과를 이름을 붙여 원하는 위치에 저장합니다. 임시 검색결과는 새 검색을 하면 바뀝니다.',
         '저장한 검색 열기': '전에 저장해 둔 검색을 엽니다.',
         '←  연구실로': '결과 창을 닫고 검색 화면으로 돌아갑니다(Esc).',
