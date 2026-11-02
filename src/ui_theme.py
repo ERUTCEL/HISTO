@@ -362,7 +362,8 @@ def _variant(root, style, bg, prefix):
                               ('active', rr(HEAD, MUTED))]),
             'RC.JudgeOk.border': (rr(CARD, LINE_STRONG), [('selected', rr(OK_INK, OK_INK)), ('active', rr(OK_PALE, OK_INK))]),
             'RC.JudgeNo.border': (rr(CARD, LINE_STRONG), [('selected', rr(SEAL, SEAL)), ('active', rr('#F5E3DE', SEAL))]),
-            'RC.Tool.border': (rr(bg, bg), [('pressed', rr(LINE, LINE)), ('active', rr(NEUTRAL_PALE, LINE))]),
+            'RC.Tool.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('pressed', rr(LINE_SOFT, MUTED)),
+                                 ('focus', rr(CARD, ACCENT)), ('active', rr(HEAD, MUTED))]),
             'RC.Entry.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('readonly', rr(FIELD, LINE)),
                                ('focus', rr(CARD, ACCENT)), ('hover', rr(CARD, MUTED))]),
             'RC.Combo.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('focus', rr(CARD, ACCENT)),
@@ -527,7 +528,7 @@ def apply_theme(root):
     style.configure('Large.TButton', padding=(px(18), px(8)))
     style.configure('PrimarySm.TButton', padding=(px(14), px(5)), foreground='#FFFFFF', font=FONTS['button_lg'])
     style.map('PrimarySm.TButton', foreground=[('disabled', '#EEF1F5')])
-    style.configure('Tool.TButton', padding=(px(10), px(6)), foreground=INK, font=body, width=0)
+    style.configure('Tool.TButton', padding=(px(11), px(5)), foreground=INK, font=body, width=0)
     style.map('Tool.TButton', foreground=[('disabled', FAINT), ('active', ACCENT)])
     style.configure('Outline.TButton')          # 보조 버튼과 같은 모양(버튼 종류를 세 가지로만)
     style.configure('Link.TButton', padding=(px(6), px(4)), foreground=ACCENT, font=label, width=0)
@@ -593,8 +594,9 @@ def apply_theme(root):
     # 탭, 표
     style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0),
                     bordercolor=BG, lightcolor=BG, darkcolor=BG)
-    style.configure('TNotebook.Tab', padding=(px(18), px(10)), background=BG, foreground=MUTED, font=label)
-    style.map('TNotebook.Tab', foreground=[('selected', ACCENT), ('active', INK)])
+    style.configure('TNotebook.Tab', padding=(px(22), px(11)), background=BG, foreground=MUTED, font=label)
+    style.map('TNotebook.Tab', foreground=[('selected', ACCENT), ('active', INK)],
+              padding=[('selected', (px(22), px(11)))], expand=[('selected', (0, 0, 0, 0))])
     _install_tabs(root, style)
     style.configure('Treeview', background=CARD, fieldbackground=CARD, foreground=INK, rowheight=px(30),
                     borderwidth=0, bordercolor=CARD, lightcolor=CARD, darkcolor=CARD, font=body)

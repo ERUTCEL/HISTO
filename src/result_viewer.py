@@ -299,17 +299,18 @@ class RelationsWindow(tk.Toplevel):
         if self.style_var.get() not in {k for k, _, _ in self.STYLES}:
             self.style_var.set('center')
 
-        head = tk.Frame(self, bg=CARD)
+        # 머리줄: 결과 창과 같은 구성(돌아가기 · 화면 이름 · 도움말 | 모양 고르기)
+        head = tk.Frame(self, bg=BG)
         head.pack(fill='x')
-        inner = tk.Frame(head, bg=CARD)
-        inner.pack(fill='x', padx=px(24), pady=(px(18), px(14)))
-        trow = tk.Frame(inner, bg=CARD)
+        inner = tk.Frame(head, bg=BG)
+        inner.pack(fill='x', padx=px(18), pady=(px(14), px(10)))
+        trow = tk.Frame(inner, bg=BG)
         trow.pack(fill='x')
-        ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.go_back, cursor='hand2').pack(side='left', padx=(0, px(10)))
-        tk.Label(trow, text='관계도', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        ttk.Button(trow, text='←  결과로', style='Tool.TButton', command=self.go_back, cursor='hand2').pack(side='left')
+        tk.Label(trow, text='관계도', bg=BG, fg=INK, font=ui.FONTS['h1']).pack(side='left', padx=(px(10), 0))
         ui.info_icon(trow, '현재 목록의 문헌에서 같은 문장에 나온 표현을 잇습니다. 혈연·지시·소유 같은 관계의 종류를 뜻하지 않습니다.\n'
-                           '많이 나온 표현 12개 · 연결 최대 30개. 한문·국문·주석 중복이 있을 수 있습니다.', CARD).pack(side='left', padx=(px(12), 0))
-        seg = tk.Frame(trow, bg=CARD)
+                           '많이 나온 표현 12개 · 연결 최대 30개. 한문·국문·주석 중복이 있을 수 있습니다.', BG).pack(side='left', padx=(px(12), 0))
+        seg = tk.Frame(trow, bg=BG)
         seg.pack(side='right')
         for key, label, desc in self.STYLES:
             b = ttk.Radiobutton(seg, text=label, value=key, variable=self.style_var, style='Seg.Toolbutton',
@@ -318,13 +319,12 @@ class RelationsWindow(tk.Toplevel):
             ui.tip(b, desc)
         self.bind('<Escape>', lambda e: self.go_back())
         self.bind('<Alt-Left>', lambda e: self.go_back())
-        self.legend = tk.Frame(inner, bg=CARD)
-        self.legend.pack(fill='x', pady=(px(10), 0))
+        self.legend = tk.Frame(inner, bg=BG)
+        self.legend.pack(fill='x', pady=(px(12), 0))
         self._build_legend()
-        ui.hline(head, LINE).pack(fill='x')
 
         body = tk.Frame(self, bg=BG)
-        body.pack(fill='both', expand=True, padx=px(20), pady=px(16))
+        body.pack(fill='both', expand=True, padx=px(24), pady=(px(4), px(18)))
         graph = ui.round_corners(tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         graph.pack(fill='x')
         self.canvas = tk.Canvas(graph, height=px(430), bg=CARD, highlightthickness=0)
@@ -386,17 +386,17 @@ class RelationsWindow(tk.Toplevel):
         for w in self.legend.winfo_children():
             w.destroy()
         legend = self.legend
-        tk.Label(legend, text='관계 종류', bg=CARD, fg=MUTED, font=ui.FONTS['small']).grid(row=0, column=0, sticky='nw', padx=(0, px(8)))
+        tk.Label(legend, text='관계 종류', bg=BG, fg=MUTED, font=ui.FONTS['small']).grid(row=0, column=0, sticky='nw', padx=(0, px(8)))
         n_by = Counter()
         for _, cnt in self.kinds:   # 종류별 근거 기록 수(연결 하나를 한 종류로 세지 않음)
             n_by.update(cnt)
         for k in rtypes.NAMES:
             if not n_by.get(k) and k != rtypes.UNKNOWN:
                 continue   # 이 자료에 없는 종류는 범례에서도 뺌(깔끔하게)
-            box = tk.Frame(legend, bg=CARD)
+            box = tk.Frame(legend, bg=BG)
             slot = sum(1 for w in legend.winfo_children() if isinstance(w, tk.Frame)) - 1
             box.grid(row=slot // 5, column=1 + slot % 5, sticky='w', padx=(0, px(12)))   # 한 줄에 5개씩
-            tk.Label(box, text='●', bg=CARD, fg=rtypes.COLORS[k], font=ui.FONTS['body']).pack(side='left')
+            tk.Label(box, text='●', bg=BG, fg=rtypes.COLORS[k], font=ui.FONTS['body']).pack(side='left')
             cb = ttk.Checkbutton(box, text=f'{k} {n_by.get(k, 0)}건', variable=self.kind_vars[k], command=self._draw, cursor='hand2')
             cb.pack(side='left')
             ui.tip(cb, '근거 문장에 이 종류의 단서 낱말이 있는 연결입니다(후보). 끄면 지도에서 숨깁니다.' if k != rtypes.UNKNOWN
@@ -406,9 +406,9 @@ class RelationsWindow(tk.Toplevel):
                              '· 사건형 — 처벌·대립, 군사·전쟁, 외교·사신, 의례·장소: 두 표현 가까이에 단서가 있으면\n'
                              '· 두 사람형 — 명령·보고: 단서가 두 이름 사이에 있고 두 이름이 가까울 때\n'
                              '· 어순 틀 — 혈연·가족(A의 아들 B / B는 A의 아들), 관직·임명(A를 B로 삼다)\n'
-                             '새 대상의 근거 문장을 읽어 70% 이상 맞은 종류만 표시합니다.', CARD).grid(row=0, column=6, sticky='w')
+                             '새 대상의 근거 문장을 읽어 70% 이상 맞은 종류만 표시합니다.', BG).grid(row=0, column=6, sticky='w')
         if self._hidden() or self._merges():
-            undo = tk.Label(legend, text='숨긴·합친 점 되돌리기', bg=CARD, fg=ACCENT, font=ui.FONTS['small'], cursor='hand2')
+            undo = tk.Label(legend, text='숨긴·합친 점 되돌리기', bg=BG, fg=ACCENT, font=ui.FONTS['small'], cursor='hand2')
             undo.grid(row=1, column=6, sticky='w')
             undo.bind('<Button-1>', lambda e: self._reset_edits())
             ui.tip(undo, '숨김: ' + (', '.join(sorted(self._hidden())) or '없음') + '\n합침: '
@@ -936,7 +936,7 @@ class ResultsWindow(tk.Toplevel):
         split = ttk.Panedwindow(self, orient='horizontal')
         split.pack(fill='both', expand=True, padx=px(24), pady=(0, px(18)))
         upper = ui.round_corners(tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
-        split.add(upper, weight=5)
+        split.add(upper, weight=11)
 
         # 목록 도구줄: 고른 문헌에 하는 일. 주요 동작은 '본문 받기' 하나, 나머지는 도구 버튼
         buttons = tk.Frame(upper, bg=HEAD)
@@ -944,12 +944,12 @@ class ResultsWindow(tk.Toplevel):
         inner = tk.Frame(buttons, bg=HEAD)
         inner.pack(fill='x', padx=px(10), pady=px(6))
         ttk.Button(inner, text='선택 문헌 본문 받기', style='PrimarySm.TButton', command=self.collect_selected, cursor='hand2').pack(side='left', padx=(0, px(8)))
-        ttk.Button(inner, text='공식 원문 ↗', style='Tool.TButton', command=self.open_original, cursor='hand2').pack(side='left')
+        ttk.Button(inner, text='공식 원문 ↗', style='Tool.TButton', command=self.open_original, cursor='hand2').pack(side='left', padx=(0, px(6)))
         ttk.Button(inner, text='비슷한 문헌', style='Tool.TButton', cursor='hand2',
-                   command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left')
-        ttk.Button(inner, text='텍스트 분석', style='Tool.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left')
+                   command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left', padx=(0, px(6)))
+        ttk.Button(inner, text='텍스트 분석', style='Tool.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', padx=(0, px(6)))
         ttk.Button(inner, text='관계도', style='Tool.TButton', cursor='hand2',
-                   command=lambda: RelationsWindow(self, self.filtered)).pack(side='left')
+                   command=lambda: RelationsWindow(self, self.filtered)).pack(side='left', padx=(0, px(6)))
         # 덜 쓰는 기능은 한곳에 모아 버튼 줄을 짧게
         more = tk.Menu(self, tearoff=0)
         more.add_command(label='새로고침  (F5)', command=self.reload)
@@ -958,7 +958,7 @@ class ResultsWindow(tk.Toplevel):
         more.add_command(label='추천 성능 보기', command=lambda: PerformanceWindow(self))
         more_btn = ttk.Button(inner, text='더 보기 ▾', style='Tool.TButton', cursor='hand2')
         more_btn.configure(command=lambda: more.tk_popup(more_btn.winfo_rootx(), more_btn.winfo_rooty() + more_btn.winfo_height()))
-        more_btn.pack(side='left')
+        more_btn.pack(side='left', padx=(0, px(6)))
         ui.hline(upper, LINE).pack(side='top', fill='x')
 
         # 목록 열: 판정 · ★ · 제목 · 출전 · 연대 · 추천(맨 끝, 작게)
@@ -988,7 +988,7 @@ class ResultsWindow(tk.Toplevel):
         self.bind('<Control-s>', lambda e: self.save_selection_or_doc())
 
         lower = ui.round_corners(tk.Frame(split, bg=ui.PAPER, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
-        split.add(lower, weight=4)
+        split.add(lower, weight=9)
         # 판정 줄: 지금 판정이 눌린 상태로 보입니다. 1·0·Del 키와 같고, 판정하면 다음 문헌으로 넘어갑니다.
         bar = tk.Frame(lower, bg=HEAD)
         bar.pack(side='top', fill='x')
@@ -1000,20 +1000,20 @@ class ResultsWindow(tk.Toplevel):
         ui.tip(self.more_toggle, '주제·분류 표시와 즐겨찾기 분류 고르기를 펼칩니다.')
         tk.Label(bar, text='판정', bg=HEAD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(14), px(8)), pady=px(7))
         self.judge_var = tk.StringVar(value='')
-        judge_yes = ttk.Radiobutton(bar, text='✓ 관련  1', value='1', variable=self.judge_var, style='Judge.Toolbutton',
+        judge_yes = ttk.Radiobutton(bar, text='✓ 관련', value='1', variable=self.judge_var, style='Judge.Toolbutton',
                                     command=lambda: self.judge(1), cursor='hand2')
         judge_yes.pack(side='left', pady=px(7))
-        judge_no = ttk.Radiobutton(bar, text='✕ 무관  0', value='0', variable=self.judge_var, style='JudgeNo.Toolbutton',
+        judge_no = ttk.Radiobutton(bar, text='✕ 무관', value='0', variable=self.judge_var, style='JudgeNo.Toolbutton',
                                    command=lambda: self.judge(0), cursor='hand2')
         judge_no.pack(side='left', padx=(px(4), 0), pady=px(7))
         judge_clear = ttk.Button(bar, text='지움', style='Tool.TButton', command=lambda: self.judge(None), cursor='hand2')
-        judge_clear.pack(side='left', padx=(px(2), 0))
+        judge_clear.pack(side='left', padx=(px(6), 0))
         ui.tip(judge_yes, '이 문헌은 연구 대상과 관련 있음 (키 1). 판정하면 다음 문헌으로 넘어갑니다.\n판정이 쌓이면 추천 순서가 내 판단을 배웁니다.')
         ui.tip(judge_no, '이 문헌은 관련 없음 (키 0). 목록에서 흐리게 보입니다.')
         ui.tip(judge_clear, '판정 지우기 (Delete 키)')
         tk.Frame(bar, bg=LINE, width=1, height=px(18)).pack(side='left', padx=px(8))
         self.fav_button = ttk.Button(bar, text='☆ 즐겨찾기', style='Tool.TButton', command=self.toggle_favorite, cursor='hand2')
-        self.fav_button.pack(side='left')
+        self.fav_button.pack(side='left', padx=(0, px(6)))
         ui.tip(self.fav_button, lambda: f"이 문헌을 즐겨찾기 '{self.save_cat.get()}' 분류에 저장 (F). 분류는 '분류 ▸'에서 바꿉니다.")
         excerpt = ttk.Button(bar, text='❝ 발췌', style='Tool.TButton', command=self.save_selection, cursor='hand2')
         excerpt.pack(side='left')
@@ -1075,10 +1075,10 @@ class ResultsWindow(tk.Toplevel):
         self.reload()
 
     def _place_sash(self, event):
-        # 처음 한 번만 목록 58% : 본문 42%로 나눕니다.
+        # 처음 한 번만 목록 55% : 본문 45%로 나눕니다.
         if event.width > px(400) and not getattr(self, '_sash_done', False):
             self._sash_done = True
-            self.after_idle(lambda: self._split.sashpos(0, int(event.width * 0.58)))
+            self.after_idle(lambda: self._split.sashpos(0, int(event.width * 0.55)))
 
     BUTTON_TIPS = {
         '선택 문헌 본문 받기': '목록에서 고른 문헌(여러 개 가능)의 본문을 원문 사이트에서 받아 옵니다.',
