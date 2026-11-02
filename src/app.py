@@ -259,10 +259,8 @@ class App(tk.Tk):
         title_label = tk.Label(title_row, textvariable=self.page_title, bg=BG, fg=INK, font=ui.FONTS['h1'], anchor='w')
         title_label.pack(side='left')
         ui.tip(title_label, lambda: self.page_lead.get())   # 화면 소개는 제목에 마우스를 올리면
-        # 한 줄 현황(예전 숫자 네 칸 대신): 자료원 7곳 선택 · 저장된 문헌 632건 · 본문 0건
+        # 현황 문구(화면에는 보이지 않음, 제목 말풍선 등에서 씀)
         self.context = tk.StringVar()
-        tk.Label(heads, textvariable=self.context, bg=BG, fg=MUTED, font=ui.FONTS['small'], anchor='w').pack(
-            anchor='w', pady=(px(4), 0))
         upd = lambda *a: self.context.set(
             f"자료원 {self.stats['selected'].get()}곳 선택  ·  저장된 문헌 {self.stats['records'].get()}건  ·  "
             f"본문 {self.stats['bodies'].get()}건")
@@ -302,18 +300,13 @@ class App(tk.Tk):
         side.pack_propagate(False)
         tk.Frame(self, bg=LINE, width=1).pack(side='left', fill='y')
         brand = tk.Frame(side, bg=NAV)
-        brand.pack(fill='x', padx=px(24), pady=(px(30), 0))
-        seal = tk.Frame(brand, bg=SEAL, width=px(44), height=px(44))
-        seal.pack(side='left')
-        seal.pack_propagate(False)
-        tk.Label(seal, text='史', bg=SEAL, fg='white', font=ui.FONTS['seal']).pack(expand=True)
-        names = tk.Frame(brand, bg=NAV)
-        names.pack(side='left', padx=(px(12), 0))
-        tk.Label(names, text='HISTRO', bg=NAV, fg=NAV_STRONG, font=ui.FONTS['brand']).pack(anchor='w')
-        tk.Label(names, text='사료 통합 검색', bg=NAV, fg=NAV_MUTED, font=ui.FONTS['small']).pack(anchor='w')
+        brand.pack(fill='x', padx=px(26), pady=(px(26), 0))
+        import logo_data
+        self._logo = logo_data.image(self, px(42))
+        tk.Label(brand, image=self._logo, bg=NAV, bd=0).pack(anchor='w')
 
         menu = tk.Frame(side, bg=NAV)
-        menu.pack(fill='x', padx=px(14), pady=(px(40), 0))
+        menu.pack(fill='x', padx=px(14), pady=(px(36), 0))
         self.nav_buttons = {}
         for key, label, _ in PAGES:
             item = NavItem(menu, label, lambda k=key: self.show_page(k))
