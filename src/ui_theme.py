@@ -128,15 +128,22 @@ def _font(root, name, family, size, weight='normal'):
 def _pick_family(root):
     global FAMILY, FAMILY_SEMI, MONO, SERIF, SERIF_BOLD
     families = set(tkfont.families(root))
-    # Windows는 굵기마다 다른 이름('MaruBuriOTF Bold'), 리눅스·맥은 한 이름 + 굵기
-    if 'MaruBuriOTF Regular' in families:
-        SERIF = ('MaruBuriOTF Regular', 'normal')
-    elif 'MaruBuriOTF' in families:
-        SERIF = ('MaruBuriOTF', 'normal')
-    if 'MaruBuriOTF Bold' in families:
-        SERIF_BOLD = ('MaruBuriOTF Bold', 'normal')
-    elif 'MaruBuriOTF' in families:
-        SERIF_BOLD = ('MaruBuriOTF', 'bold')
+    # 마루부리 이름: Windows는 굵기마다 다른 이름이고, 한국어 Windows는 한국어 이름으로 알려 줍니다
+    # ('마루 부리OTF 중간 / 조금굵은 / 굵은'). 리눅스·맥은 한 이름('MaruBuriOTF') + 굵기.
+    def first(*names):
+        return next((n for n in names if n in families), None)
+    regular = first('MaruBuriOTF Regular', '마루 부리OTF 중간')
+    semi_name = first('MaruBuriOTF SemiBold', '마루 부리OTF 조금굵은')
+    bold = first('MaruBuriOTF Bold', '마루 부리OTF 굵은')
+    single = first('MaruBuriOTF', '마루 부리OTF')
+    if regular:
+        SERIF = (regular, 'normal')
+    elif single:
+        SERIF = (single, 'normal')
+    if bold:
+        SERIF_BOLD = (bold, 'normal')
+    elif single:
+        SERIF_BOLD = (single, 'bold')
     for name in ('Pretendard', 'Pretendard Variable', '맑은 고딕', 'Malgun Gothic', 'Noto Sans CJK KR', 'Noto Sans KR'):
         if name in families:
             FAMILY = name
@@ -144,7 +151,7 @@ def _pick_family(root):
     FAMILY_SEMI = 'Pretendard SemiBold' if 'Pretendard SemiBold' in families else None
     if SERIF[0]:   # 마루부리가 있으면 앱 전체(버튼·표·입력칸 포함)를 마루부리로
         FAMILY = SERIF[0]
-        FAMILY_SEMI = 'MaruBuriOTF SemiBold' if 'MaruBuriOTF SemiBold' in families else None
+        FAMILY_SEMI = semi_name
     for name in ('D2Coding', 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono'):
         if name in families:
             MONO = name
@@ -315,6 +322,62 @@ def _chevron(root, fill, color, w=22, h=16):
 
 # 버튼·입력칸은 모서리 바깥을 '스타일 바탕색'으로 칠합니다. 그래서 흰 카드 위의 위젯은
 # 'Card.' 스타일로 자동으로 바꿔 모서리가 카드 색과 맞게 합니다.
+_LABEL_KIDS = [('Button.padding', {'sticky': 'nswe', 'children': [('Button.label', {'sticky': 'nswe'})]})]
+_TOOL_KIDS = [('Toolbutton.padding', {'sticky': 'nswe', 'children': [('Toolbutton.label', {'sticky': 'nswe'})]})]
+# 그림 테두리를 쓰는 스타일 → (테두리 그림 이름, 안쪽)
+_SHAPES = {
+    'TButton': ('RC.Button.border', _LABEL_KIDS), 'Large.TButton': ('RC.Button.border', _LABEL_KIDS),
+    'Outline.TButton': ('RC.Button.border', _LABEL_KIDS),
+    'Primary.TButton': ('RC.Primary.border', _LABEL_KIDS), 'PrimarySm.TButton': ('RC.Primary.border', _LABEL_KIDS),
+    'Tool.TButton': ('RC.Tool.border', _LABEL_KIDS),
+    'Seg.Toolbutton': ('RC.Seg.border', _TOOL_KIDS), 'Judge.Toolbutton': ('RC.JudgeOk.border', _TOOL_KIDS),
+    'JudgeNo.Toolbutton': ('RC.JudgeNo.border', _TOOL_KIDS),
+}
+_VARIANTS = set()
+
+
+def _variant(root, style, bg, prefix):
+    """바탕색 bg 위에 놓일 버튼·입력칸용 그림 묶음과 스타일(prefix + 원래 이름)을 만듭니다."""
+    key = (str(root.tk), bg)
+    suffix = '' if not prefix else '.' + bg[1:]
+    R, S = px(RADIUS), px(RADIUS) * 2 + 6
+    rr = lambda fill, border=None: _round_rect(root, S, S, R, fill, border, 1, bg)
+    if 'RC.Combo.arrow' not in style.element_names():
+        style.element_create('RC.Combo.arrow', 'image', _chevron(root, CARD, MUTED),
+                             ('disabled', _chevron(root, FIELD, LINE_STRONG)), sticky='')
+    if key not in _VARIANTS:
+        _VARIANTS.add(key)
+        elements = {
+            'RC.Button.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('pressed', rr(LINE_SOFT, MUTED)),
+                                 ('focus', rr(CARD, ACCENT)), ('active', rr(HEAD, MUTED))]),
+            'RC.Primary.border': (rr(ACCENT), [('disabled', rr('#9DAAC0')), ('pressed', rr(ACCENT_PRESS)),
+                                  ('focus', rr(ACCENT, ACCENT_PRESS)), ('active', rr(ACCENT_HOVER))]),
+            'RC.Seg.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('selected', rr(ACCENT_PALE, ACCENT)),
+                              ('active', rr(HEAD, MUTED))]),
+            'RC.JudgeOk.border': (rr(CARD, LINE_STRONG), [('selected', rr(OK_INK, OK_INK)), ('active', rr(OK_PALE, OK_INK))]),
+            'RC.JudgeNo.border': (rr(CARD, LINE_STRONG), [('selected', rr(SEAL, SEAL)), ('active', rr('#F5E3DE', SEAL))]),
+            'RC.Tool.border': (rr(bg, bg), [('pressed', rr(LINE, LINE)), ('active', rr(NEUTRAL_PALE, LINE))]),
+            'RC.Entry.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('readonly', rr(FIELD, LINE)),
+                               ('focus', rr(CARD, ACCENT)), ('hover', rr(CARD, MUTED))]),
+            'RC.Combo.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('focus', rr(CARD, ACCENT)),
+                               ('hover', rr(CARD, MUTED))]),
+        }
+        for name, (img, states) in elements.items():
+            if name + suffix not in style.element_names():
+                style.element_create(name + suffix, 'image', img, *states, border=R + 2, padding=(px(2), px(1)), sticky='nsew')
+    for base, (el, kids) in _SHAPES.items():
+        style.layout(prefix + base, [(el + suffix, {'sticky': 'nswe', 'children': kids})])
+    entry = [('RC.Entry.field' + suffix, {'sticky': 'nswe', 'children': [
+        ('Entry.padding', {'sticky': 'nswe', 'children': [('Entry.textarea', {'sticky': 'nswe'})]})]})]
+    style.layout(prefix + 'TEntry', entry)
+    style.layout(prefix + 'Large.TEntry', entry)
+    style.layout(prefix + 'TCombobox', [('RC.Combo.field' + suffix, {'sticky': 'nswe', 'children': [
+        ('RC.Combo.arrow', {'side': 'right', 'sticky': 'e'}),
+        ('Combobox.padding', {'sticky': 'nswe', 'children': [('Combobox.textarea', {'sticky': 'nswe'})]})]})])
+    for base in ('Link.TButton', 'Quiet.TButton'):
+        style.layout(prefix + base, _LABEL_KIDS)
+
+
 FITTED = ('TButton', 'Primary.TButton', 'PrimarySm.TButton', 'Large.TButton', 'Outline.TButton', 'Link.TButton', 'Quiet.TButton', 'Tool.TButton',
           'Seg.Toolbutton', 'Judge.Toolbutton', 'JudgeNo.Toolbutton', 'TEntry', 'Large.TEntry', 'TCombobox', 'TCheckbutton', 'Source.TCheckbutton')
 
@@ -340,9 +403,12 @@ _FITTED_DONE = set()
 
 
 def _fit(event):
-    """위젯 모서리 바깥 색을 부모 바탕색에 맞춥니다(BG가 아니면 'BgRRGGBB.' 스타일을 만들어 씀)."""
+    """위젯 모서리 바깥 색을 부모 바탕색에 맞춥니다(BG가 아니면 'BgRRGGBB.' 스타일). 위젯마다 한 번만."""
     w = event.widget
+    if getattr(w, '_fitted', False):
+        return
     try:
+        w._fitted = True
         style = str(w.cget('style')) or w.winfo_class()
     except (tk.TclError, AttributeError):
         return
@@ -353,9 +419,12 @@ def _fit(event):
     if not bg.startswith('#') or len(bg) != 7:
         return
     want = base if bg == BG.upper() else f'Bg{bg[1:]}.{base}'
-    if want != base and want not in _FITTED_DONE:
-        ttk.Style(w).configure(want, background=bg)
-        _FITTED_DONE.add(want)
+    if want != base and bg not in _FITTED_DONE:
+        st = ttk.Style(w)
+        _variant(w._root(), st, bg, f'Bg{bg[1:]}.')
+        for b in FITTED:
+            st.configure(f'Bg{bg[1:]}.{b}', background=bg)
+        _FITTED_DONE.add(bg)
     if want != style:
         w.configure(style=want)
 
@@ -436,42 +505,12 @@ def apply_theme(root):
 
     # 명령의 위계: 주요(먹청 채움, 화면에 하나) · 보조(종이 + 1px 선, 작게) · 도구(상자 없음, 도구줄) · 글자 링크.
     # 모서리는 반경 2 — 웹 카드가 아니라 데스크톱 컨트롤.
-    R, S = px(RADIUS), px(RADIUS) * 2 + 6
-    rr = lambda fill, border=None: _round_rect(root, S, S, R, fill, border)
-    clear = _RR.setdefault((str(root.tk), 'clear', S), tk.PhotoImage(master=root, width=S, height=S))   # 투명(도구 버튼 평상시)
-    elements = {
-        'RC.Button.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('pressed', rr(LINE_SOFT, MUTED)),
-                             ('focus', rr(CARD, ACCENT)), ('active', rr(HEAD, MUTED))]),
-        'RC.Primary.border': (rr(ACCENT), [('disabled', rr('#9DAAC0')), ('pressed', rr(ACCENT_PRESS)),
-                              ('focus', rr(ACCENT, ACCENT_PRESS)), ('active', rr(ACCENT_HOVER))]),
-        'RC.Seg.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('selected', rr(ACCENT_PALE, ACCENT)),
-                          ('active', rr(HEAD, MUTED))]),
-        'RC.JudgeOk.border': (rr(CARD, LINE_STRONG), [('selected', rr(OK_INK, OK_INK)), ('active', rr(OK_PALE, OK_INK))]),
-        'RC.JudgeNo.border': (rr(CARD, LINE_STRONG), [('selected', rr(SEAL, SEAL)), ('active', rr('#F5E3DE', SEAL))]),
-        'RC.Tool.border': (clear, [('disabled', clear), ('pressed', rr(LINE, LINE)), ('active', rr(NEUTRAL_PALE, LINE))]),
-        'RC.Entry.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('readonly', rr(FIELD, LINE)),
-                           ('focus', rr(CARD, ACCENT)), ('hover', rr(CARD, MUTED))]),
-        'RC.Combo.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('focus', rr(CARD, ACCENT)),
-                           ('hover', rr(CARD, MUTED))]),
-    }
-    for name, (img, states) in elements.items():
-        if name not in style.element_names():
-            spec = []
-            for st, im in states:
-                spec.append((st, im))
-            style.element_create(name, 'image', img, *spec, border=R + 2, padding=(px(2), px(1)), sticky='nsew')
+    # 둥근 모서리 그림은 '불투명'하게(모서리 바깥을 바탕색으로 칠해서) 만듭니다. 반투명 그림은 Tk가 그릴 때마다
+    # 바탕과 섞느라 아주 느려집니다(앱 시작 6초 → 0.9초). 그래서 바탕색마다 그림 묶음을 따로 둡니다(_variant).
+    _variant(root, style, BG, '')
     if 'RC.Combo.arrow' not in style.element_names():
         style.element_create('RC.Combo.arrow', 'image', _chevron(root, CARD, MUTED),
                              ('disabled', _chevron(root, FIELD, LINE_STRONG)), sticky='')
-    label_kids = [('Button.padding', {'sticky': 'nswe', 'children': [('Button.label', {'sticky': 'nswe'})]})]
-    style.layout('TButton', [('RC.Button.border', {'sticky': 'nswe', 'children': label_kids})])
-    style.layout('Primary.TButton', [('RC.Primary.border', {'sticky': 'nswe', 'children': label_kids})])
-    style.layout('PrimarySm.TButton', [('RC.Primary.border', {'sticky': 'nswe', 'children': label_kids})])
-    style.layout('Link.TButton', label_kids)
-    style.layout('Quiet.TButton', label_kids)
-    style.layout('Tool.TButton', [('RC.Tool.border', {'sticky': 'nswe', 'children': label_kids})])
-    style.layout('Seg.Toolbutton', [('RC.Seg.border', {'sticky': 'nswe', 'children': [
-        ('Toolbutton.padding', {'sticky': 'nswe', 'children': [('Toolbutton.label', {'sticky': 'nswe'})]})]})])
 
     pad = (px(14), px(6))
     style.configure('TButton', padding=pad, background=BG, foreground=INK, font=btn, anchor='center')
@@ -494,20 +533,13 @@ def apply_theme(root):
               font=[('selected', label)])
     # 판정 단추: 지금 판정이 눌린 상태로 보임(관련 = 녹색 먹, 무관 = 주색)
     for name, el in (('Judge.Toolbutton', 'RC.JudgeOk.border'), ('JudgeNo.Toolbutton', 'RC.JudgeNo.border')):
-        style.layout(name, [(el, {'sticky': 'nswe', 'children': [
-            ('Toolbutton.padding', {'sticky': 'nswe', 'children': [('Toolbutton.label', {'sticky': 'nswe'})]})]})])
         style.configure(name, padding=(px(10), px(3)), background=BG, foreground=INK, font=label, anchor='center')
         style.map(name, foreground=[('selected', '#FFFFFF')])
 
     # 입력칸: 둥근 테두리, 고르면 파란 테두리
-    style.layout('TEntry', [('RC.Entry.field', {'sticky': 'nswe', 'children': [
-        ('Entry.padding', {'sticky': 'nswe', 'children': [('Entry.textarea', {'sticky': 'nswe'})]})]})])
     style.configure('TEntry', padding=(px(10), px(6)), background=BG, fieldbackground=CARD, foreground=INK, insertcolor=INK)
     style.map('TEntry', fieldbackground=[('disabled', FIELD), ('readonly', FIELD)], foreground=[('disabled', MUTED)])
     style.configure('Large.TEntry', padding=(px(12), px(6)))
-    style.layout('TCombobox', [('RC.Combo.field', {'sticky': 'nswe', 'children': [
-        ('RC.Combo.arrow', {'side': 'right', 'sticky': 'e'}),
-        ('Combobox.padding', {'sticky': 'nswe', 'children': [('Combobox.textarea', {'sticky': 'nswe'})]})]})])
     style.configure('TCombobox', padding=(px(10), px(5), px(4), px(5)), background=BG, fieldbackground=CARD, foreground=INK)
     style.map('TCombobox', fieldbackground=[('readonly', CARD), ('disabled', FIELD)],
               foreground=[('readonly', INK), ('disabled', MUTED)],
@@ -575,6 +607,7 @@ def apply_theme(root):
         root.bind_class(cls, '<Map>', _fit, add='+')
     for base in FITTED:
         style.configure('Card.' + base, background=CARD)
+    _variant(root, style, CARD, 'Card.')
     _install_ime_font(root)
     _THEMED.add(str(root.tk))
     return style

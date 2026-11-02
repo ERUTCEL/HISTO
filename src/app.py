@@ -1650,6 +1650,8 @@ if __name__ == '__main__':
                 'state': app.state.get(),
                 'log': app.log.get('1.0', 'end'),
                 'default_output': str(APP_HOME / '수집결과'),
+                'font': ui.FAMILY, 'font_semi': ui.FAMILY_SEMI, 'font_bold': list(ui.SERIF_BOLD),
+                'maru_names': sorted(f for f in __import__('tkinter.font').font.families(app) if 'aru' in f or '마루' in f),
             }, ensure_ascii=False, indent=2), encoding='utf-8')
             app.destroy()
 
