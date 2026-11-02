@@ -58,9 +58,15 @@ def _fill(tree, rows):
 
 
 def _note(parent, text, bg=BG):
-    """설명 문장: 늘 보이는 회색 글 대신 'ⓘ 설명'에 마우스를 올리면 보이게. 빈 문자열이면 결과를 적는 상태 줄."""
+    """설명 문장: 화면에 깔지 않고, 그 탭의 도움말(창 오른쪽 위 'ⓘ 도움말')에 모읍니다.
+    빈 문자열이면 결과를 적는 상태 줄."""
     if text:
-        return ui.info_icon(parent, text, bg)
+        w = parent
+        while w is not None and not hasattr(w, '_help'):
+            w = w.master
+        if w is not None:
+            w._help.append(text)
+        return tk.Frame(parent, height=1, bg=parent.cget('bg'))
     label = tk.Label(parent, text=text, bg=bg, fg=MUTED, font=ui.FONTS['small'], justify='left', anchor='w')
     label.bind('<Configure>', lambda e: label.configure(wraplength=max(px(200), e.width - px(4))))
     return label
@@ -75,26 +81,26 @@ class TextLabWindow(tk.Toplevel):
         self.title('텍스트 분석')
         ui.fit_geometry(self, 1180, 820, 860, 600)
         self.bind('<Escape>', lambda e: self.destroy())
-        head = tk.Frame(self, bg=CARD)
-        head.pack(fill='x')
-        inner = tk.Frame(head, bg=CARD)
-        inner.pack(fill='x', padx=px(24), pady=(px(18), px(12)))
-        trow = tk.Frame(inner, bg=CARD)
-        trow.pack(anchor='w')
-        ttk.Button(trow, text='←  결과로', style='Quiet.TButton', command=self.destroy, cursor='hand2').pack(side='left', padx=(0, px(10)))
-        tk.Label(trow, text='텍스트 분석', bg=CARD, fg=INK, font=ui.FONTS['h1']).pack(side='left')
+        # 머리줄: 결과 창과 같은 구성(돌아가기 · 화면 이름 · 현황 | 도움말)
+        head = tk.Frame(self, bg=BG)
+        head.pack(fill='x', padx=px(18), pady=(px(14), px(4)))
+        ttk.Button(head, text='←  결과로', style='Tool.TButton', command=self.destroy, cursor='hand2').pack(side='left')
+        tk.Label(head, text='텍스트 분석', bg=BG, fg=INK, font=ui.FONTS['h1']).pack(side='left', padx=(px(6), px(14)))
         self.status = tk.StringVar(value=f'문헌 {len(results.rows)}건')
-        tk.Label(inner, textvariable=self.status, bg=CARD, fg=ACCENT, font=ui.FONTS['label_sm']).pack(anchor='w', pady=(px(4), 0))
-        ui.hline(head, LINE).pack(fill='x')
+        tk.Label(head, textvariable=self.status, bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', pady=(px(3), 0))
+        help_icon = tk.Label(head, text='ⓘ 이 탭 도움말', bg=BG, fg=ACCENT, font=ui.FONTS['small'], cursor='question_arrow')
+        help_icon.pack(side='right')
+        ui.tip(help_icon, lambda: '\n\n'.join(self._current_page()._help) or '도움말이 없습니다.')
 
         self.book = ttk.Notebook(self)
-        self.book.pack(fill='both', expand=True, padx=px(20), pady=px(14))
+        self.book.pack(fill='both', expand=True, padx=px(24), pady=(0, px(18)))
         self.tabs = {}
         self.advanced = bool(settings.get('lab_advanced', False))
         # 자주 쓰는 세 가지만 보이고, 연구용 점검 두 가지는 '자동 분류' 탭 아래 링크로 켭니다
         for key, label in (('search', '비슷한 문헌 찾기'), ('explore', '낱말 살펴보기'), ('topics', '자동 분류'),
                            ('mtl', '여러 분류 함께 학습 (고급)'), ('domain', '시대·자료집 차이 점검 (고급)')):
-            frame = tk.Frame(self.book, bg=BG, padx=px(16), pady=px(14))
+            frame = tk.Frame(self.book, bg=BG, padx=0, pady=px(14))
+            frame._help = []
             self.book.add(frame, text=label)
             self.tabs[key] = frame
         self._build_search(self.tabs['search'])
@@ -107,6 +113,10 @@ class TextLabWindow(tk.Toplevel):
                 self.book.hide(self.tabs[key])
         self.book.bind('<<NotebookTabChanged>>', self._tab_changed)
         self.show(tab)
+
+    def _current_page(self):
+        current = self.book.select()
+        return next((f for f in self.tabs.values() if str(f) == current), self.tabs['search'])
 
     def show(self, tab, **kw):
         tab = {'words': 'explore', 'context': 'explore', 'relate': 'explore'}.get(tab, tab)
@@ -142,20 +152,24 @@ class TextLabWindow(tk.Toplevel):
         _note(page, '낱말이나 원문 구절을 넣으면 내용이 가장 비슷한 문헌부터 보여줍니다. 한글·한문 모두 찾고, '
                     '여러 문헌에 흔한 말보다 드문 고유명사가 겹칠수록 위로 올라옵니다. '
                     '결과 창에서 문헌을 고른 뒤 \'이 문헌과 비슷한 문헌\'을 누르면 내용이 닮은 다른 기록을 찾습니다.').pack(fill='x')
-        row = tk.Frame(page, bg=BG)
-        row.pack(fill='x', pady=(px(10), px(10)))
+        panel = ui.card(page, 18, 14)
+        panel.pack(fill='x')
+        ui.section(panel, '찾을 낱말이나 원문 구절').pack(fill='x')
+        row = tk.Frame(panel, bg=CARD)
+        row.pack(fill='x', pady=(px(8), 0))
         self.search_var = tk.StringVar()
-        entry = ttk.Entry(row, textvariable=self.search_var, font=ui.FONTS['input'])
+        entry = ttk.Entry(row, textvariable=self.search_var, font=ui.FONTS['input'], style='Large.TEntry')
         entry.pack(side='left', fill='x', expand=True)
         entry.bind('<Return>', lambda e: self.search())
-        ttk.Button(row, text='찾기', style='Primary.TButton', command=self.search, cursor='hand2').pack(side='left', padx=(px(8), 0))
-        ttk.Button(row, text='이 문헌과 비슷한 문헌', command=lambda: self.similar(None), cursor='hand2').pack(side='left', padx=(px(8), 0))
-        self.search_title = tk.StringVar(value='검색어(예: 淑嬪崔氏 追崇, 육상궁 제향)를 넣거나, 결과 창에서 문헌을 고른 뒤 비슷한 문헌을 찾으세요.')
-        tk.Label(page, textvariable=self.search_title, bg=BG, fg=INK, font=ui.FONTS['label'], anchor='w').pack(fill='x', pady=(0, px(6)))
+        ui.placeholder(entry, '예: 淑嬪崔氏 追崇, 육상궁 제향', variable=self.search_var)
+        ttk.Button(row, text='찾기', style='Primary.TButton', command=self.search, cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+        ttk.Button(row, text='고른 문헌과 비슷한 문헌', command=lambda: self.similar(None), cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
+        self.search_title = tk.StringVar(value='결과 창에서 문헌을 고른 뒤 \'고른 문헌과 비슷한 문헌\'을 눌러도 됩니다.')
+        tk.Label(page, textvariable=self.search_title, bg=BG, fg=MUTED, font=ui.FONTS['small'], anchor='w').pack(fill='x', pady=(px(14), px(6)))
         frame, self.search_tree = _table(page, [('sim', '비슷한 정도', 90), ('title', '제목', 420), ('source', '자료집', 120), ('terms', '겹치는 낱말', 260)])
         frame.pack(fill='both', expand=True)
         self.search_tree.bind('<Double-1>', lambda e: self._open_in_results(self.search_tree))
-        _note(page, '두 번 클릭하면 결과 창에서 그 문헌을 엽니다.').pack(anchor='w', pady=(px(6), 0))
+        _note(page, '목록에서 두 번 클릭하면 결과 창에서 그 문헌을 엽니다.')
         self._search_keys = []
 
     def _equivalents(self, word):
@@ -220,25 +234,28 @@ class TextLabWindow(tk.Toplevel):
         _note(page, '낱말을 하나 넣으면 그 말이 나온 문헌 수, 자주 함께 나온 말, 비슷한 맥락에서 쓰이는 말, 쓰임새별 문장을 보여줍니다. '
                     '두세 개를 넣으면 서로 얼마나 함께 나오는지(우연보다 몇 배인지), 시대별 변화와 함께 나온 문장을 보여줍니다. '
                     '아래 문장을 두 번 누르면 결과 창에서 그 문헌을 엽니다. 한자는 한글로 친 뒤 F9.').pack(fill='x')
-        row = tk.Frame(page, bg=BG)
-        row.pack(fill='x', pady=(px(10), px(10)))
-        self.word_box = tk.Frame(row, bg=BG)
+        panel = ui.card(page, 18, 14)
+        panel.pack(fill='x', pady=(0, px(14)))
+        ui.section(panel, '살펴볼 낱말 (두세 개를 넣으면 서로의 관계)').pack(fill='x')
+        row = tk.Frame(panel, bg=CARD)
+        row.pack(fill='x', pady=(px(8), 0))
+        self.word_box = tk.Frame(row, bg=CARD)
         self.word_box.pack(side='left', anchor='n')
         self.rel_vars, self.rel_entries = [], []
         for _ in range(3):
             self.add_word_entry()
-        side = tk.Frame(row, bg=BG)
+        side = tk.Frame(row, bg=CARD)
         side.pack(side='left', anchor='n', padx=(px(8), 0))
         self.add_word_btn = ttk.Button(side, text='+ 낱말 추가', style='Link.TButton', command=self.add_word_entry, cursor='hand2')
         self.add_word_btn.pack(side='left')
         ttk.Button(side, text='비우기', style='Link.TButton', command=self.clear_words, cursor='hand2').pack(side='left')
         row = side
-        tk.Label(row, text='시대', bg=BG, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(12), px(6)))
+        tk.Label(row, text='시대', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(px(12), px(6)))
         self.period_var = tk.StringVar(value='전체')
         self.period_box = ttk.Combobox(row, textvariable=self.period_var, state='readonly', width=10, values=['전체'])
         self.period_box.pack(side='left')
         self.period_box.bind('<<ComboboxSelected>>', lambda e: self.explore())
-        ttk.Button(row, text='살펴보기', style='Primary.TButton', command=self.explore, cursor='hand2').pack(side='left', padx=(px(10), 0))
+        ttk.Button(row, text='살펴보기', style='Primary.TButton', command=self.explore, cursor='hand2').pack(side='left', padx=(px(12), 0))
 
         panes = ttk.Panedwindow(page, orient='vertical')
         panes.pack(fill='both', expand=True)

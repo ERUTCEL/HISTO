@@ -1261,6 +1261,7 @@ class ResultsWindow(tk.Toplevel):
             self.era_choice.set(self.profile.get('era_choice') if self.profile.get('era_choice') in period.ERAS else '자동')
         except Exception as exc:
             self.rows, self.filtered, self.shown = [], [], {}
+            self._shown_ids = None
             children = self.tree.get_children()
             if children:
                 self.tree.delete(*children)
@@ -1310,9 +1311,10 @@ class ResultsWindow(tk.Toplevel):
         self.reload()
 
     def schedule_filter(self, *args):
+        # 입력이 잠깐 멈춘 뒤에 한 번만 거릅니다(한 글자마다 목록·본문을 다시 그리지 않게)
         if self._timer:
             self.after_cancel(self._timer)
-        self._timer = self.after(200, self.filter_rows)
+        self._timer = self.after(320, self.filter_rows)
 
     def filter_rows(self):
         self._timer = None
@@ -1349,11 +1351,16 @@ class ResultsWindow(tk.Toplevel):
                 continue
             self.filtered.append(row)
         self._sort(self.filtered)
-        children = self.tree.get_children()
-        if children:
-            self.tree.delete(*children)
+        # 결과가 그대로면(찾기 칸에 한 글자 더 쳐도 같은 문헌들) 목록을 다시 그리지 않습니다
+        keys = [id(r) for r in self.filtered[:3000]]
+        same = keys == getattr(self, '_shown_ids', None)
+        self._shown_ids = keys
+        if not same:
+            children = self.tree.get_children()
+            if children:
+                self.tree.delete(*children)
         self.shown = {str(i): row for i, row in enumerate(self.filtered[:3000])}
-        for i, row in self.shown.items():
+        for i, row in (() if same else self.shown.items()):
             a = row['analysis']
             self.tree.insert('', 'end', iid=i, tags=('even' if int(i) % 2 == 0 else 'odd',) + self._judge_tag(row),
                              values=(self._fav_text(row), '✓' if row.get('_hit') else '', self._rec_text(row), a['score'], self._label_text(row), row.get('title', '(제목 없음)'), row.get('source', ''),
@@ -1379,10 +1386,12 @@ class ResultsWindow(tk.Toplevel):
         self.info_detail = '\n'.join(x.strip() for x in (prio + (('  ·  관점: ' + ' · '.join(f'{name} {counts[name]}건' for name in hf.NAMES if counts[name]))
                                                                 if any(counts[name] for name in hf.NAMES) else '')).split('  ·  ') if x.strip())
         if self.shown:
-            again = [i for i, row in self.shown.items() if keep and row.get('key') in keep]
-            self.tree.selection_set(again or ['0'])
-            self.tree.see((again or ['0'])[0])
-            self.show_selected()
+            again = [i for i, row in self.shown.items() if keep and row.get('key') in keep] or ['0']
+            if tuple(self.tree.selection()) != tuple(again):
+                self.tree.selection_set(again)   # 선택이 바뀌면 <<TreeviewSelect>>가 본문을 한 번 그립니다
+            else:
+                self.show_selected()             # 같은 문헌이면 찾은 낱말 표시만 새로
+            self.tree.see(again[0])
         else:
             self._write_detail([('현재 조건에 해당하는 자료가 없습니다.', 'note')])
 

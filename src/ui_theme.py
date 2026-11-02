@@ -90,7 +90,8 @@ def _prepare_platform():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except (AttributeError, OSError):
             ctypes.windll.user32.SetProcessDPIAware()
-        for path in sorted((resource_dir() / 'fonts').glob('*.otf')):
+        fonts = resource_dir() / 'fonts'
+        for path in sorted(list(fonts.glob('*.otf')) + list(fonts.glob('*.ttf'))):
             ctypes.windll.gdi32.AddFontResourceExW(str(path), 0x10, 0)  # FR_PRIVATE
     except Exception:
         pass
@@ -129,13 +130,14 @@ def _pick_family(root):
     global FAMILY, FAMILY_SEMI, MONO, SERIF, SERIF_BOLD
     families = set(tkfont.families(root))
     # 마루부리 이름: Windows는 굵기마다 다른 이름이고, 한국어 Windows는 한국어 이름으로 알려 줍니다
-    # ('마루 부리OTF 중간 / 조금굵은 / 굵은'). 리눅스·맥은 한 이름('MaruBuriOTF') + 굵기.
+    # ('마루 부리 중간 / 조금굵은 / 굵은'). 리눅스·맥은 한 이름('MaruBuri') + 굵기.
+    # 앱에는 TTF판을 넣습니다: Windows(GDI)는 글자가 많은 OTF(CFF) 글꼴을 TTF보다 느리게 그립니다.
     def first(*names):
         return next((n for n in names if n in families), None)
-    regular = first('MaruBuriOTF Regular', '마루 부리OTF 중간')
-    semi_name = first('MaruBuriOTF SemiBold', '마루 부리OTF 조금굵은')
-    bold = first('MaruBuriOTF Bold', '마루 부리OTF 굵은')
-    single = first('MaruBuriOTF', '마루 부리OTF')
+    regular = first('MaruBuri Regular', '마루 부리 중간', 'MaruBuriOTF Regular', '마루 부리OTF 중간')
+    semi_name = first('MaruBuri SemiBold', '마루 부리 조금굵은', 'MaruBuriOTF SemiBold', '마루 부리OTF 조금굵은')
+    bold = first('MaruBuri Bold', '마루 부리 굵은', 'MaruBuriOTF Bold', '마루 부리OTF 굵은')
+    single = first('MaruBuri', '마루 부리', 'MaruBuriOTF', '마루 부리OTF')
     if regular:
         SERIF = (regular, 'normal')
     elif single:
@@ -270,6 +272,10 @@ def _round_rect(root, w, h, r, fill, border=None, width=1, outside=None):
     n = 4
 
     def pixel(x, y):
+        # 모서리 네 칸 밖은 계산할 것 없이 바탕색 또는 테두리색(그림 대부분)
+        if (r <= x and x + 1 <= w - r) or (r <= y and y + 1 <= h - r):
+            col = b if (x < width or y < width or x >= w - width or y >= h - width) else f
+            return list(col) + [255]
         cov = edge = 0
         for sy in range(n):
             for sx in range(n):
@@ -585,7 +591,8 @@ def apply_theme(root):
     style.configure('Card.Vertical.TScrollbar', troughcolor=CARD, bordercolor=CARD)
 
     # 탭, 표
-    style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+    style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0),
+                    bordercolor=BG, lightcolor=BG, darkcolor=BG)
     style.configure('TNotebook.Tab', padding=(px(18), px(10)), background=BG, foreground=MUTED, font=label)
     style.map('TNotebook.Tab', foreground=[('selected', ACCENT), ('active', INK)])
     _install_tabs(root, style)
@@ -779,7 +786,7 @@ def placeholder(widget, text, variable=None):
     is_text = isinstance(widget, tk.Text)
     bg = widget.cget('bg') if is_text else CARD
     hint = tk.Label(widget.master, text=text, bg=bg, fg=FAINT, justify='left', anchor='nw',
-                    font=widget.cget('font') if is_text else FONTS['input_lg'], cursor='xterm')
+                    font=widget.cget('font') if is_text else (str(widget.cget('font')) or FONTS['input']), cursor='xterm')
 
     def empty():
         if variable is not None:
