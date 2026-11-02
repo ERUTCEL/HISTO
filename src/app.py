@@ -26,7 +26,7 @@ import hanja_input
 import aliases
 from ui_theme import (apply_theme, px, BG, CARD, INK, MUTED, NAV, GOLD, LINE, LINE_STRONG,
                       FIELD, ACCENT, OK, BUSY, SEAL, SURFACE_ALT, NAV_ACTIVE, NAV_HOVER, NAV_TEXT,
-                      NAV_MUTED, NAV_LINE)
+                      NAV_MUTED, NAV_LINE, NAV_STRONG)
 
 ROOT = Path(__file__).resolve().parent
 APP_HOME = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else ROOT
@@ -179,17 +179,17 @@ class QueueStream:
 
 
 class NavItem(tk.Frame):
-    """사이드바 메뉴 한 줄: 왼쪽 금색 표시선 + 이름."""
+    """사이드바 메뉴 한 줄: 고른 메뉴는 둥근 연파랑 바탕 + 파란 글자."""
 
     def __init__(self, parent, text, command):
         super().__init__(parent, bg=NAV, cursor='hand2', height=px(44))
         self.pack_propagate(False)
         self.active = False
         self.command = command
-        self.bar = tk.Frame(self, width=px(3), bg=NAV)
-        self.bar.pack(side='left', fill='y', pady=px(12))
+        self.bar = tk.Frame(self, width=px(3), bg=NAV)   # 예전 표시선(지금은 둥근 바탕으로 표시)
         self.label = tk.Label(self, text=text, bg=NAV, fg=NAV_TEXT, font=ui.FONTS['body'], anchor='w', padx=px(12))
         self.label.pack(side='left', fill='both', expand=True)
+        ui.round_corners(self, 6, border=None)
         for widget in (self, self.label, self.bar):
             widget.bind('<Button-1>', lambda e: self.command())
             widget.bind('<Enter>', lambda e: self._hover(True))
@@ -200,16 +200,18 @@ class NavItem(tk.Frame):
             self._paint(NAV_HOVER if inside else NAV)
 
     def _paint(self, bg):
+        if str(self.cget('bg')) == bg:
+            return
         self.configure(bg=bg)
         self.label.configure(bg=bg)
+        self.refresh_corners()
         if not self.active:
             self.bar.configure(bg=bg)
 
     def set_active(self, active):
         self.active = active
         self._paint(NAV_ACTIVE if active else NAV)
-        self.bar.configure(bg=GOLD if active else NAV)
-        self.label.configure(fg='white' if active else NAV_TEXT,
+        self.label.configure(fg=ACCENT if active else NAV_TEXT,
                              font=ui.FONTS['label'] if active else ui.FONTS['body'])
 
 
@@ -257,12 +259,16 @@ class App(tk.Tk):
         title_label = tk.Label(title_row, textvariable=self.page_title, bg=BG, fg=INK, font=ui.FONTS['h1'], anchor='w')
         title_label.pack(side='left')
         ui.tip(title_label, lambda: self.page_lead.get())   # 화면 소개는 제목에 마우스를 올리면
-        chip = tk.Frame(header, bg=CARD, highlightthickness=1, highlightbackground=LINE, padx=px(12), pady=px(5))
-        chip.pack(side='right', anchor='s', pady=(0, px(4)))
-        self.chip_dot = ui.dot(chip, OK, CARD)
-        self.chip_dot.pack(side='left', padx=(0, px(8)))
-        self.chip_text = tk.Label(chip, text='대기 중', bg=CARD, fg=MUTED, font=ui.FONTS['small'])
-        self.chip_text.pack(side='left')
+        # 한 줄 현황(예전 숫자 네 칸 대신): 자료원 7곳 선택 · 저장된 문헌 632건 · 본문 0건
+        self.context = tk.StringVar()
+        tk.Label(heads, textvariable=self.context, bg=BG, fg=MUTED, font=ui.FONTS['small'], anchor='w').pack(
+            anchor='w', pady=(px(4), 0))
+        upd = lambda *a: self.context.set(
+            f"자료원 {self.stats['selected'].get()}곳 선택  ·  저장된 문헌 {self.stats['records'].get()}건  ·  "
+            f"본문 {self.stats['bodies'].get()}건")
+        for var in self.stats.values():
+            var.trace_add('write', upd)
+        upd()
 
         self.pages_box = tk.Frame(self.main, bg=BG)
         self.pages_box.pack(fill='both', expand=True, padx=px(40), pady=(0, px(20)))
@@ -294,6 +300,7 @@ class App(tk.Tk):
         side = tk.Frame(self, bg=NAV, width=px(224))
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
+        tk.Frame(self, bg=LINE, width=1).pack(side='left', fill='y')
         brand = tk.Frame(side, bg=NAV)
         brand.pack(fill='x', padx=px(24), pady=(px(30), 0))
         seal = tk.Frame(brand, bg=SEAL, width=px(44), height=px(44))
@@ -302,7 +309,7 @@ class App(tk.Tk):
         tk.Label(seal, text='史', bg=SEAL, fg='white', font=ui.FONTS['seal']).pack(expand=True)
         names = tk.Frame(brand, bg=NAV)
         names.pack(side='left', padx=(px(12), 0))
-        tk.Label(names, text='HISTRO', bg=NAV, fg='white', font=ui.FONTS['brand']).pack(anchor='w')
+        tk.Label(names, text='HISTRO', bg=NAV, fg=NAV_STRONG, font=ui.FONTS['brand']).pack(anchor='w')
         tk.Label(names, text='사료 통합 검색', bg=NAV, fg=NAV_MUTED, font=ui.FONTS['small']).pack(anchor='w')
 
         menu = tk.Frame(side, bg=NAV)
@@ -313,13 +320,6 @@ class App(tk.Tk):
             item.pack(fill='x', pady=(0, px(4)))
             self.nav_buttons[key] = item
 
-        bottom = tk.Frame(side, bg=NAV)
-        bottom.pack(side='bottom', fill='x', padx=px(24), pady=px(24))
-        ui.hline(bottom, NAV_LINE).pack(fill='x', pady=(0, px(14)))
-        tk.Label(bottom, text=f'{len(SOURCES)}개 공개 자료원 · {len(AUTO_IDS)}곳 통합', bg=NAV, fg=NAV_TEXT,
-                 font=ui.FONTS['small']).pack(anchor='w')
-        tk.Label(bottom, text='정치·경제·사회·문화·사상·생활사\n연대와 관계 후보 탐색', bg=NAV, fg=NAV_MUTED, justify='left',
-                 font=ui.FONTS['small']).pack(anchor='w', pady=(px(6), 0))
 
     def _build_statusbar(self):
         bar = tk.Frame(self.main, bg=SURFACE_ALT, height=px(40))
@@ -338,8 +338,6 @@ class App(tk.Tk):
     def _set_busy(self, busy):
         color = BUSY if busy else OK
         self.status_mark.mark.configure(bg=color)
-        self.chip_dot.mark.configure(bg=color)
-        self.chip_text.configure(text='수집 중' if busy else '대기 중', fg=INK if busy else MUTED)
         if busy:
             self.progress.pack(side='right', before=self.status_label)
             self.progress.start(18)
@@ -353,19 +351,6 @@ class App(tk.Tk):
         scroller = ui.ScrollFrame(page)
         scroller.pack(fill='both', expand=True)
         page = scroller.body
-
-        metrics = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
-        metrics.pack(fill='x', pady=(0, px(16)))
-        items = [('sites', '연결 자료원'), ('selected', '통합 검색 선택'), ('records', '저장된 문헌'), ('bodies', '저장된 본문')]
-        for i, (key, label) in enumerate(items):
-            metrics.columnconfigure(i * 2, weight=1, uniform='metric')
-            cell = tk.Frame(metrics, bg=CARD, padx=px(20), pady=px(14))
-            cell.grid(row=0, column=i * 2, sticky='nsew')
-            tk.Label(cell, text=label, bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w')
-            tk.Label(cell, textvariable=self.stats[key], bg=CARD, fg=ACCENT if key == 'selected' else INK,
-                     font=ui.FONTS['metric']).pack(anchor='w')
-            if i < len(items) - 1:
-                ui.vline(metrics).grid(row=0, column=i * 2 + 1, sticky='ns', pady=px(12))
 
         card = ui.card(page, 28, 24)
         card.pack(fill='x')
@@ -524,13 +509,13 @@ class App(tk.Tk):
         self.library_path.pack(anchor='w', fill='x', pady=(px(2), 0))
         text.bind('<Configure>', lambda e: self.library_path.configure(wraplength=max(px(200), e.width - px(4))))
 
-        table = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        table = ui.round_corners(tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         table.pack(fill='both', expand=True)
         self.recent = ttk.Treeview(table, columns=('title', 'source', 'state'), show='headings', height=12)
         for key, label, width in (('title', '최근 저장된 문헌', 520), ('source', '자료원', 170), ('state', '보관 상태', 110)):
             self.recent.heading(key, text=label, anchor='w')
             self.recent.column(key, width=px(width), stretch=key == 'title', anchor='w')
-        self.recent.tag_configure('odd', background='#FBFAF7')
+        self.recent.tag_configure('odd', background='#F9FAFB')
         self.recent.tag_configure('even', background=CARD)
         scroll = ttk.Scrollbar(table, orient='vertical', command=self.recent.yview, style='Card.Vertical.TScrollbar')
         self.recent.configure(yscrollcommand=scroll.set)
@@ -559,7 +544,7 @@ class App(tk.Tk):
 
         body = tk.Frame(page, bg=BG)
         body.pack(fill='both', expand=True)
-        left = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE, width=px(220))
+        left = ui.round_corners(tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE, width=px(220)))
         left.pack(side='left', fill='y')
         left.pack_propagate(False)
         tk.Label(left, text='분류', bg=CARD, fg=MUTED, font=ui.FONTS['label_sm']).pack(anchor='w', padx=px(14), pady=(px(12), px(6)))
@@ -579,7 +564,7 @@ class App(tk.Tk):
 
         right = tk.Frame(body, bg=BG)
         right.pack(side='left', fill='both', expand=True, padx=(px(12), 0))
-        table = tk.Frame(right, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        table = ui.round_corners(tk.Frame(right, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         table.pack(fill='both', expand=True)
         self.fav_items = ttk.Treeview(table, columns=('kind', 'title', 'source', 'year', 'cat', 'saved'), show='headings',
                                       selectmode='extended', height=8)
@@ -587,7 +572,7 @@ class App(tk.Tk):
                                   ('year', '연대', 56), ('cat', '분류', 110), ('saved', '저장일', 78)):
             self.fav_items.heading(key, text=label, anchor='w')
             self.fav_items.column(key, width=px(width), stretch=key == 'title', anchor='w')
-        self.fav_items.tag_configure('odd', background='#FBFAF7')
+        self.fav_items.tag_configure('odd', background='#F9FAFB')
         sc = ttk.Scrollbar(table, orient='vertical', command=self.fav_items.yview, style='Card.Vertical.TScrollbar')
         self.fav_items.configure(yscrollcommand=sc.set)
         sc.pack(side='right', fill='y')
@@ -824,7 +809,7 @@ class App(tk.Tk):
     # ── 진행 기록 ──────────────────────────────────────────
 
     def _build_activity(self, page):
-        box = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        box = ui.round_corners(tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         box.pack(fill='both', expand=True)
         self.log = tk.Text(box, height=20, state='disabled', font=ui.FONTS['mono'], wrap='word', bg=CARD, fg=INK,
                            relief='flat', padx=px(20), pady=px(16), spacing3=px(3), highlightthickness=0,
@@ -833,6 +818,13 @@ class App(tk.Tk):
         self.log.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
         self.log.pack(side='left', fill='both', expand=True)
+        empty = tk.Frame(box, bg=CARD)
+        tk.Label(empty, text='아직 실행한 검색이 없습니다', bg=CARD, fg=INK, font=ui.FONTS['h3']).pack()
+        tk.Label(empty, text='통합 검색에서 검색을 시작하면 사이트마다 찾은 건수와 진행 상황이 여기에 차례로 기록됩니다.',
+                 bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(pady=(px(6), px(14)))
+        ttk.Button(empty, text='통합 검색으로 가기', command=lambda: self.show_page('search')).pack()
+        empty.place(relx=0.5, rely=0.45, anchor='center')
+        self.log_empty = empty
 
     # ── 동작 ───────────────────────────────────────────────
 
@@ -859,8 +851,8 @@ class App(tk.Tk):
             self.refresh_bookmarks()
 
     def _update_back(self):
-        # 돌아갈 화면이 있을 때만 '← 뒤로'를 제목 앞에 보입니다.
-        if self.history:
+        # 화면 이동은 사이드바가 맡습니다(제목 옆 '← 이전 화면'은 보이지 않음, Alt+← 는 그대로).
+        if False:
             if not self.back_button.winfo_ismapped():
                 self.back_button.pack(side='left', before=self.back_button.master.winfo_children()[-1],
                                       padx=(0, px(10)))
@@ -1168,7 +1160,7 @@ class App(tk.Tk):
             self.mode_changed()
         else:
             self.depth_box.configure(state='disabled')
-        self.terms.configure(state=state, bg=FIELD if enabled else '#F3F1EC')
+        self.terms.configure(state=state, bg=FIELD if enabled else '#F2F4F7')
         for check in self.source_checks:
             check.configure(state=state)
 
@@ -1488,6 +1480,9 @@ class App(tk.Tk):
     def _append_log(self, text):
         at_end = self.log.yview()[1] >= 0.999
         self.log.configure(state='normal')
+        if getattr(self, 'log_empty', None) is not None:
+            self.log_empty.place_forget()
+            self.log_empty = None
         self.log.insert('end', text)
         lines = int(self.log.index('end-1c').split('.')[0])
         if lines > self.LOG_LIMIT:

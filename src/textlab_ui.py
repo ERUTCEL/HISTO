@@ -38,12 +38,12 @@ def run_background(widget, work, done, on_error=None):
 
 
 def _table(parent, columns, height=12):
-    frame = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+    frame = ui.round_corners(tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
     tree = ttk.Treeview(frame, columns=[c for c, _, _ in columns], show='headings', height=height)
     for name, label, width in columns:
         tree.heading(name, text=label, anchor='w')
         tree.column(name, width=px(width), stretch=width >= 200, anchor='w')
-    tree.tag_configure('odd', background='#FBFAF7')
+    tree.tag_configure('odd', background='#F9FAFB')
     scroll = ttk.Scrollbar(frame, orient='vertical', command=tree.yview, style='Card.Vertical.TScrollbar')
     tree.configure(yscrollcommand=scroll.set)
     scroll.pack(side='right', fill='y')
@@ -242,7 +242,7 @@ class TextLabWindow(tk.Toplevel):
 
         panes = ttk.Panedwindow(page, orient='vertical')
         panes.pack(fill='both', expand=True)
-        box = tk.Frame(panes, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        box = ui.round_corners(tk.Frame(panes, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         self.rel_text = tk.Text(box, wrap='word', font=ui.FONTS['body'], relief='flat', bg=CARD, fg=INK, height=14,
                                 padx=px(18), pady=px(14), spacing3=px(5), highlightthickness=0, cursor='arrow')
         scroll = ttk.Scrollbar(box, orient='vertical', command=self.rel_text.yview, style='Card.Vertical.TScrollbar')
@@ -734,7 +734,7 @@ class TextLabWindow(tk.Toplevel):
                                                 ('in', '같은 자료로 배울 때', 130), ('src', '다른 자료로 배울 때', 130),
                                                 ('rew', '보완 ①', 70), ('grl', '보완 ②', 70), ('note', '결과', 260)], height=7)
         frame.pack(fill='x', pady=(px(8), 0))
-        warn = tk.Label(page, bg=BG, fg='#9A2F1F', font=ui.FONTS['small'], justify='left', anchor='w',
+        warn = tk.Label(page, bg=BG, fg='#B42318', font=ui.FONTS['small'], justify='left', anchor='w',
                         text='보완 ①: 점검할 시대·자료집과 비슷한 자료를 더 중요하게 배움 · 보완 ②: 시대·자료집에 상관없이 통하는 표현 중심으로 배움.\n'
                              '주의: 시대에 따른 용어·문체 차이 자체가 연구 대상이라면 보완 결과를 쓰지 마세요. '
                              '보완 뒤 특정 주제가 오히려 덜 맞으면 \'결과\' 칸에 표시합니다. 표시한 문헌이 10건 미만이면 숫자가 흔들릴 수 있습니다.')

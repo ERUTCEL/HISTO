@@ -233,7 +233,7 @@ def _reading_text(parent, **kw):
     text.tag_configure('head', font=ui.FONTS['label'], foreground=ACCENT, spacing1=px(14), spacing3=px(4))
     text.tag_configure('note', font=ui.FONTS['small'], foreground=MUTED, lmargin1=px(2), lmargin2=px(2))
     text.tag_configure('body', font=ui.FONTS['reading'], foreground=INK, spacing2=px(5))
-    text.tag_configure('error', font=ui.FONTS['small'], foreground='#9A2F1F')
+    text.tag_configure('error', font=ui.FONTS['small'], foreground='#B42318')
     text.tag_configure('link', font=ui.FONTS['small'], foreground=ACCENT, underline=True)
     # 사이트 주소를 누르면 브라우저로 엽니다
     text.tag_bind('link', '<Enter>', lambda e: text.configure(cursor='hand2'))
@@ -256,6 +256,14 @@ def _open_link(text, event):
         except Exception as exc:
             messagebox.showerror('주소 열기', str(exc), parent=text.winfo_toplevel())
     return 'break'
+
+
+def _pill(c, x1, y1, x2, y2, r=None, **kw):
+    """캔버스에 둥근 사각형(반경 r, 기본은 높이의 절반 = 알약 모양)."""
+    r = min(r if r is not None else (y2 - y1) / 2, (x2 - x1) / 2, (y2 - y1) / 2)
+    pts = (x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+           x1, y2, x1, y2 - r, x1, y1 + r, x1, y1)
+    return c.create_polygon(pts, smooth=True, splinesteps=24, **kw)
 
 
 class RelationsWindow(tk.Toplevel):
@@ -311,7 +319,7 @@ class RelationsWindow(tk.Toplevel):
 
         body = tk.Frame(self, bg=BG)
         body.pack(fill='both', expand=True, padx=px(20), pady=px(16))
-        graph = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        graph = ui.round_corners(tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         graph.pack(fill='x')
         self.canvas = tk.Canvas(graph, height=px(430), bg=CARD, highlightthickness=0)
         self.canvas.pack(fill='x')
@@ -324,7 +332,7 @@ class RelationsWindow(tk.Toplevel):
         self._fill_edges_list()
         self.edges_list.pack(side='left', fill='x', expand=True)
         self.edges_list.bind('<<ComboboxSelected>>', lambda e: self.show_edge(self.edges_list.current()))
-        box = tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        box = ui.round_corners(tk.Frame(body, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         box.pack(fill='both', expand=True)
         self.evidence = _reading_text(box)
         scroll = ttk.Scrollbar(box, orient='vertical', command=self.evidence.yview, style='Card.Vertical.TScrollbar')
@@ -549,7 +557,7 @@ class RelationsWindow(tk.Toplevel):
             base = max(px(2), min(px(1) + n // 4, px(8)))
             width_ = base + (px(3) if index == self._current else 0)
             # 선 = 회색 바탕 + 단서가 있는 기록의 비율만큼만 그 종류 색(가운데 쪽부터). 연결 전체를 한 종류로 칠하지 않음
-            line = c.create_line(x1, y1, x2, y2, fill='#7F8A96' if index == self._current else '#D3CCBF',
+            line = c.create_line(x1, y1, x2, y2, fill='#667085' if index == self._current else '#D0D5DD',
                                  width=width_, tags=(tag,))
             self._edge_ids[index] = line
             mx, my = (x1 * 0.42 + x2 * 0.58), (y1 * 0.42 + y2 * 0.58)
@@ -557,15 +565,15 @@ class RelationsWindow(tk.Toplevel):
             if numbers:   # 선 위에 함께 나온 기록 수
                 t = c.create_text(mx, my, text=str(n), fill=INK, font=ui.FONTS['label_sm'], tags=(tag,))
                 bx = c.bbox(t)
-                c.tag_lower(c.create_oval(bx[0] - px(5), bx[1] - px(2), bx[2] + px(5), bx[3] + px(2), fill=CARD,
-                                          outline='#B9B1A2', tags=(tag,)), t)
+                c.tag_lower(_pill(c, bx[0] - px(6), bx[1] - px(2), bx[2] + px(6), bx[3] + px(2), fill=CARD,
+                                  outline='#D0D5DD', width=1, tags=(tag,)), t)
                 bar_y = bx[3] + px(5)
             else:
                 bar_y = my
             if typed:   # 작은 비율 막대: 회색 = 단서 없음, 색 = 그 종류 단서가 있는 기록의 비율
                 bw, bh = px(40), px(6)
                 bx0 = mx - bw / 2
-                c.create_rectangle(bx0, bar_y, bx0 + bw, bar_y + bh, fill='#E6E1D7', outline='', tags=(tag,))
+                c.create_rectangle(bx0, bar_y, bx0 + bw, bar_y + bh, fill='#EAECF0', outline='', tags=(tag,))
                 x_ = bx0
                 for kind, cnt in typed:
                     w_ = max(px(2), bw * cnt / n)
@@ -581,8 +589,8 @@ class RelationsWindow(tk.Toplevel):
             tag = 'node_' + str(self._names.index(name))
             w = max(px(40), ui.FONTS['label_sm'].measure(name) // 2 + px(14))
             hub = self.style_var.get() == 'center' and name == self._center
-            c.create_rectangle(x - w, y - px(16), x + w, y + px(16), fill=ACCENT if hub else CARD, outline=ACCENT,
-                               width=2 + int(2 * self._counts[name] / top), tags=(tag,))
+            _pill(c, x - w, y - px(16), x + w, y + px(16), fill=ACCENT if hub else ACCENT_PALE, outline=ACCENT,
+                  width=1 + int(2 * self._counts[name] / top), tags=(tag,))
             c.create_text(x, y, text=name, fill='white' if hub else ACCENT, font=ui.FONTS['label_sm'], tags=(tag,))
             c.tag_bind(tag, '<Button-1>', lambda e, n=name: self._node_clicked(n))
             c.tag_bind(tag, '<Button-3>', lambda e, n=name: self._node_menu(e, n))
@@ -602,7 +610,7 @@ class RelationsWindow(tk.Toplevel):
         if x2 > c.winfo_width() - 4:
             c.move(t, -(x2 - x1) - px(24), 0)
             x1, y1, x2, y2 = c.bbox(t)
-        c.tag_raise(t, c.create_rectangle(x1 - px(6), y1 - px(4), x2 + px(6), y2 + px(4), fill='#FFFDF5', outline=INK, tags=('tl_tip',)))
+        c.tag_raise(t, c.create_rectangle(x1 - px(6), y1 - px(4), x2 + px(6), y2 + px(4), fill='#FFFFFF', outline=INK, tags=('tl_tip',)))
 
     def _node_clicked(self, name):
         """표현을 누르면: 중심형이면 가운데로, 아니면 그 표현의 가장 굵은 연결을 보여 줌."""
@@ -631,13 +639,13 @@ class RelationsWindow(tk.Toplevel):
                 pair = tuple(sorted((a, b)))
                 x, y = x0 + j * cell, y0 + i * cell
                 if a == b:
-                    c.create_rectangle(x, y, x + cell, y + cell, fill='#EFEBE2', outline=CARD)
+                    c.create_rectangle(x, y, x + cell, y + cell, fill='#F0F2F5', outline=CARD)
                     continue
                 idx, w = weight.get(pair, (None, 0))
                 if idx is not None and not self._visible(idx):
                     idx, w = None, 0
                 shade = 0 if not w else 0.2 + 0.8 * w / top
-                fill = _blend('#FFFFFF', ACCENT, shade) if w else '#FAF8F3'   # 진하기 = 건수(종류는 칸 모서리 점)
+                fill = _blend('#FFFFFF', ACCENT, shade) if w else '#F9FAFB'   # 진하기 = 건수(종류는 칸 모서리 점)
                 tag = f'cell{i}_{j}'
                 c.create_rectangle(x, y, x + cell, y + cell, fill=fill, outline=CARD, tags=(tag,))
                 if w:
@@ -724,7 +732,7 @@ class RelationsWindow(tk.Toplevel):
         for j, (col, text) in enumerate(cols):
             if total[col]:
                 h = (rh - px(4)) * total[col] / tmax
-                c.create_rectangle(x0 + j * cw + cw * 0.2, y + rh - h, x0 + (j + 0.8) * cw, y + rh, fill='#C9C1B0', outline='')
+                c.create_rectangle(x0 + j * cw + cw * 0.2, y + rh - h, x0 + (j + 0.8) * cw, y + rh, fill='#C2C8D2', outline='')
                 c.create_text(x0 + (j + 0.5) * cw, y + rh / 2, text=str(total[col]), fill=INK, font=ui.FONTS['small'])
         c.create_line(px(8), y + rh + px(3), x0 + len(cols) * cw, y + rh + px(3), fill=LINE)
         # 연결 줄
@@ -765,7 +773,7 @@ class RelationsWindow(tk.Toplevel):
         if x2 > c.winfo_width() - 4:
             c.move(t, -(x2 - x1) - px(24), 0)
             x1, y1, x2, y2 = c.bbox(t)
-        r = c.create_rectangle(x1 - px(6), y1 - px(4), x2 + px(6), y2 + px(4), fill='#FFFDF5', outline=INK, tags=('tl_tip',))
+        r = c.create_rectangle(x1 - px(6), y1 - px(4), x2 + px(6), y2 + px(4), fill='#FFFFFF', outline=INK, tags=('tl_tip',))
         c.tag_raise(t, r)
 
     def go_back(self):
@@ -917,11 +925,11 @@ class ResultsWindow(tk.Toplevel):
         buttons = tk.Frame(self, bg=BG)
         buttons.pack(fill='x', padx=px(28), pady=(px(14), px(12)))
         ttk.Button(buttons, text='선택 문헌 본문 받기', style='Primary.TButton', command=self.collect_selected, cursor='hand2').pack(side='left')
-        ttk.Button(buttons, text='공식 원문 ↗', style='Outline.TButton', command=self.open_original, cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
-        ttk.Button(buttons, text='비슷한 문헌', style='Large.TButton', cursor='hand2',
+        ttk.Button(buttons, text='공식 원문 ↗', style='TButton', command=self.open_original, cursor='hand2').pack(side='left', padx=(px(8), 0))
+        ttk.Button(buttons, text='비슷한 문헌', style='TButton', cursor='hand2',
                    command=lambda: self.open_lab('search', similar_to=(self.selected() or [{}])[0].get('key'))).pack(side='left', padx=(px(8), 0))
-        ttk.Button(buttons, text='텍스트 분석', style='Outline.TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', fill='y', padx=(px(8), 0))
-        ttk.Button(buttons, text='관계도', style='Large.TButton', cursor='hand2',
+        ttk.Button(buttons, text='텍스트 분석', style='TButton', command=lambda: self.open_lab('search'), cursor='hand2').pack(side='left', padx=(px(8), 0))
+        ttk.Button(buttons, text='관계도', style='TButton', cursor='hand2',
                    command=lambda: RelationsWindow(self, self.filtered)).pack(side='left', padx=(px(8), 0))
         # 덜 쓰는 기능은 한곳에 모아 버튼 줄을 짧게
         more = tk.Menu(self, tearoff=0)
@@ -929,7 +937,7 @@ class ResultsWindow(tk.Toplevel):
         more.add_command(label='원문 주소 복사', command=self.copy_url)
         more.add_command(label='파일 폴더 열기', command=self.open_folder)
         more.add_command(label='추천 성능 보기', command=lambda: PerformanceWindow(self))
-        more_btn = ttk.Button(buttons, text='더 보기 ▾', style='Large.TButton', cursor='hand2')
+        more_btn = ttk.Button(buttons, text='더 보기 ▾', style='Link.TButton', cursor='hand2')
         more_btn.configure(command=lambda: more.tk_popup(more_btn.winfo_rootx(), more_btn.winfo_rooty() + more_btn.winfo_height()))
         more_btn.pack(side='left', padx=(px(8), 0))
         # 대상 시대: 자동(직접 언급 사료가 가장 많은 시대) 또는 직접 고르기 → 다른 시대 기록은 점수를 낮춤
@@ -942,7 +950,7 @@ class ResultsWindow(tk.Toplevel):
 
         split = ttk.Panedwindow(self, orient='horizontal')
         split.pack(fill='both', expand=True, padx=px(28), pady=(0, px(20)))
-        upper = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        upper = ui.round_corners(tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         split.add(upper, weight=5)
         self.tree = ttk.Treeview(upper, columns=('fav', 'hit', 'rec', 'score', 'label', 'title', 'source', 'facets', 'year', 'status'),
                                  show='headings', selectmode='extended', height=12)
@@ -960,14 +968,14 @@ class ResultsWindow(tk.Toplevel):
         self.tree.pack(side='left', fill='both', expand=True)
         self.tree.bind('<<TreeviewSelect>>', self.show_selected)
         self.tree.tag_configure('even', background=CARD)
-        self.tree.tag_configure('odd', background='#FBFAF7')
+        self.tree.tag_configure('odd', background='#F9FAFB')
         for key, label in (('1', 1), ('0', 0), ('<Delete>', None), ('<BackSpace>', None)):
             self.tree.bind(key, lambda e, v=label: self.judge(v))
         self.tree.bind('f', lambda e: self.toggle_favorite())
         self.tree.bind('<Button-3>', self._tree_menu)
         self.bind('<Control-s>', lambda e: self.save_selection_or_doc())
 
-        lower = tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        lower = ui.round_corners(tk.Frame(split, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         split.add(lower, weight=4)
         bar = tk.Frame(lower, bg=HEAD)
         bar.pack(side='top', fill='x')
@@ -979,7 +987,7 @@ class ResultsWindow(tk.Toplevel):
         ui.tip(self.more_toggle, '주제·분류 표시와 즐겨찾기 분류 고르기를 펼칩니다.')
         judge_yes = ttk.Button(bar, text='✓ 관련', style='Outline.TButton', command=lambda: self.judge(1), cursor='hand2')
         judge_yes.pack(side='left', padx=(px(10), 0), pady=px(6))
-        judge_no = ttk.Button(bar, text='✕ 무관', style='Quiet.TButton', command=lambda: self.judge(0), cursor='hand2')
+        judge_no = ttk.Button(bar, text='✕ 무관', style='Outline.TButton', command=lambda: self.judge(0), cursor='hand2')
         judge_no.pack(side='left', padx=(px(6), 0), pady=px(6))
         ui.tip(judge_yes, '이 문헌은 연구 대상과 관련 있음 (키 1). 판정이 쌓이면 추천 순서가 내 판단을 배웁니다.')
         ui.tip(judge_no, '이 문헌은 관련 없음 (키 0). 판정을 지우려면 Delete 키.')
@@ -1009,7 +1017,7 @@ class ResultsWindow(tk.Toplevel):
         self.detail.configure(yscrollcommand=dscroll.set)
         dscroll.pack(side='right', fill='y')
         self.detail.pack(side='left', fill='both', expand=True)
-        self.detail.tag_configure('saved', background='#F5ECDA')
+        self.detail.tag_configure('saved', background='#FEF6E6')
         self.detail.bind('<Button-3>', self._detail_menu)
         # 본문 펼치기 단추(본문 칸 안의 글자 단추)
         self.detail.tag_configure('action', font=ui.FONTS['label'], foreground='white', background=ACCENT,
@@ -2099,7 +2107,7 @@ class PerformanceWindow(tk.Toplevel):
         data = ranker.training_data(parent.rows, parent.judg) if parent.judg else []
         pos = sum(y for _, y in data)
         unlabeled = len(parent.rows) - len(data)
-        stats = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        stats = ui.round_corners(tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         stats.pack(fill='x')
         for i, (label, value) in enumerate((('판정한 문헌', len(data)), ('관련', pos), ('무관', len(data) - pos), ('미판정', unlabeled))):
             stats.columnconfigure(i, weight=1, uniform='s')
@@ -2114,7 +2122,7 @@ class PerformanceWindow(tk.Toplevel):
                      bg=BG, fg=MUTED, font=ui.FONTS['body'], justify='left').pack(anchor='w', pady=(px(18), 0))
             return
         ev = ranker.evaluate(data)
-        table = tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE)
+        table = ui.round_corners(tk.Frame(page, bg=CARD, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE))
         table.pack(fill='x', pady=(px(16), 0))
         table.columnconfigure(0, weight=1)
         for c, text in enumerate(('기준', '기본 점수만', '판정 학습만', '추천 (둘을 섞음 · 지금 쓰는 방식)')):
@@ -2141,7 +2149,7 @@ class PerformanceWindow(tk.Toplevel):
             cols.pack(fill='x', pady=(px(16), 0))
             cols.columnconfigure(0, weight=1, uniform='w')
             cols.columnconfigure(1, weight=1, uniform='w')
-            for c, (title, items, color) in enumerate((('추천을 올리는 특징', up, OK_INK), ('추천을 내리는 특징', down, '#9A2F1F'))):
+            for c, (title, items, color) in enumerate((('추천을 올리는 특징', up, OK_INK), ('추천을 내리는 특징', down, '#B42318'))):
                 box = ui.card(cols, 18, 14)
                 box.grid(row=0, column=c, sticky='nsew', padx=(0, px(8)) if c == 0 else 0)
                 tk.Label(box, text=title, bg=CARD, fg=INK, font=ui.FONTS['h3']).pack(anchor='w', pady=(0, px(6)))

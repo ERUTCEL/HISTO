@@ -1,6 +1,6 @@
 """기록물 연구 데스크톱용 공통 테마.
 
-한지 바탕 · 먹색 사이드바 · 쪽빛 강조 · 낙관(붉은 도장) 로고.
+밝은 회백 바탕 · 흰 사이드바 · 인디고 강조 · 낙관(붉은 도장) 로고.
 Tkinter로 그릴 수 있는 평면 카드, 1px 선, 알약형 배지만 사용합니다.
 """
 import os
@@ -11,36 +11,37 @@ from tkinter import font as tkfont
 from tkinter import ttk
 
 # ── 색상 토큰 ───────────────────────────────────────────────
-BG = '#F4F1EA'            # 한지 바탕
-SURFACE_ALT = '#EFEBE2'   # 상태 표시줄
+BG = '#F6F7F9'            # 밝은 회백 바탕
+SURFACE_ALT = '#F0F2F5'   # 상태 표시줄
 CARD = '#FFFFFF'
-FIELD = '#FAF8F3'         # 입력 영역 바탕
-HEAD = '#F7F4ED'          # 표 머리
-LINE = '#E3DDD0'
-LINE_SOFT = '#EEE9DF'
-LINE_STRONG = '#CFC7B7'
-INK = '#1F2328'
-MUTED = '#5F646B'
-NAV = '#1E2630'           # 먹색 사이드바
-NAV_HOVER = '#252E3A'
-NAV_ACTIVE = '#2B3542'
-NAV_TEXT = '#C9D1DA'
-NAV_MUTED = '#8E99A6'
-NAV_LINE = '#333E4B'
-ACCENT = '#27507A'        # 쪽빛
-ACCENT_HOVER = '#1E3F62'
-ACCENT_PRESS = '#173250'
-ACCENT_PALE = '#E6EDF5'
-ACCENT_SOFT = '#DCE6F2'
-GOLD = '#C9A45C'
-SEAL = '#B23A26'          # 낙관
-OK = '#2E7D5B'
-OK_PALE = '#E3F0E9'
-OK_INK = '#1E6B52'
-WARN_PALE = '#F5ECDA'
-WARN_INK = '#7A5210'
-BUSY = '#C27C0E'
-NEUTRAL_PALE = '#F1EEE7'
+FIELD = '#F9FAFB'         # 입력 영역 바탕
+HEAD = '#F8F9FB'          # 표 머리
+LINE = '#E4E7EC'
+LINE_SOFT = '#EEF0F3'
+LINE_STRONG = '#D0D5DD'
+INK = '#101828'
+MUTED = '#5D6679'
+NAV = '#FFFFFF'           # 흰 사이드바
+NAV_HOVER = '#F2F4F7'
+NAV_ACTIVE = '#EEF2FF'
+NAV_TEXT = '#475467'
+NAV_MUTED = '#8A94A6'
+NAV_LINE = '#EAECF0'
+NAV_STRONG = '#101828'      # 사이드바 제목·선택 글자
+ACCENT = '#3B5BDB'        # 인디고
+ACCENT_HOVER = '#3049C2'
+ACCENT_PRESS = '#263B9E'
+ACCENT_PALE = '#EEF2FF'
+ACCENT_SOFT = '#E0E7FF'
+GOLD = '#3B5BDB'
+SEAL = '#E5484D'          # 낙관
+OK = '#12B76A'
+OK_PALE = '#ECFDF3'
+OK_INK = '#067647'
+WARN_PALE = '#FEF6E6'
+WARN_INK = '#B54708'
+BUSY = '#F79009'
+NEUTRAL_PALE = '#F2F4F7'
 
 # 이전 버전 이름 호환
 GREEN = ACCENT
@@ -54,7 +55,7 @@ BADGES = {
     'neutral': (NEUTRAL_PALE, MUTED),
     'complete': (OK_PALE, OK_INK),
     'pending': (NEUTRAL_PALE, MUTED),
-    'failed': ('#F7E3DF', '#9A2F1F'),
+    'failed': ('#FEF3F2', '#B42318'),
 }
 
 SCALE = 1.0
@@ -165,14 +166,14 @@ def _check_image(root, size, gap, fill, border, mark):
     return img
 
 
-def _tab_image(root, fill, border, left, top, right, size=24):
-    """탭 바탕(9칸 늘리기용). 아래쪽은 본문과 이어지게 테두리 없음."""
+def _tab_image(root, fill, border, left, top, right, size=24, bottom=0):
+    """탭 바탕(9칸 늘리기용)."""
     img = tk.PhotoImage(master=root, width=size, height=size)
     rows = []
     for y in range(size):
         row = []
         for x in range(size):
-            edge = y < top or x < left or x >= size - right
+            edge = y < top or x < left or x >= size - right or y >= size - bottom
             row.append(border if edge else fill)
         rows.append('{' + ' '.join(row) + '}')
     img.put(' '.join(rows), to=(0, 0))
@@ -183,22 +184,155 @@ _TAB_IMAGES = {}
 
 
 def _install_tabs(root, style):
-    """고른 탭: 쪽빛 굵은 테두리(위 3·옆 2), 나머지: 얇은 회색 테두리."""
-    side, top = max(2, px(2)), max(3, px(3))
+    """밑줄 탭: 고른 탭은 파란 굵은 밑줄(2px), 나머지는 회색 1px 밑줄."""
+    thick = max(2, px(2))
     imgs = _TAB_IMAGES.setdefault(str(root.tk), {
-        'normal': _tab_image(root, NEUTRAL_PALE, LINE, 1, 1, 1),
-        'active': _tab_image(root, '#ECE8DF', LINE, 1, 1, 1),
-        'selected': _tab_image(root, CARD, ACCENT, side, top, side),
+        'normal': _tab_image(root, BG, LINE, 0, 0, 0, bottom=1),
+        'active': _tab_image(root, BG, LINE_STRONG, 0, 0, 0, bottom=1),
+        'selected': _tab_image(root, BG, ACCENT, 0, 0, 0, bottom=thick),
     })
     try:
         style.element_create('Histro.Notebook.tab', 'image', imgs['normal'],
                              ('selected', imgs['selected']), ('active', imgs['active']),
-                             border=(top + 1, top + 1, top + 1, 1), sticky='nsew')
+                             border=(1, 1, 1, thick + 1), sticky='nsew')
     except tk.TclError:
         return   # 이미 만든 경우
     style.layout('TNotebook.Tab', [('Histro.Notebook.tab', {'sticky': 'nswe', 'children': [
         ('Notebook.padding', {'side': 'top', 'sticky': 'nswe', 'children': [
             ('Notebook.label', {'side': 'top', 'sticky': ''})]})]})])
+
+
+
+# ── 둥근 모서리(작은 반경) — 버튼·입력칸·카드 ───────────────────
+# Tk에는 둥근 모서리가 없어 PNG(투명도 포함)를 직접 만들어 9칸 늘리기 이미지로 씁니다.
+RADIUS = 6
+_RR = {}
+
+
+def _png(w, h, pixel):
+    import zlib
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)
+        for x in range(w):
+            raw.extend(pixel(x, y))
+
+    def chunk(tag, data):
+        return len(data).to_bytes(4, 'big') + tag + data + (zlib.crc32(tag + data) & 0xffffffff).to_bytes(4, 'big')
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', w.to_bytes(4, 'big') + h.to_bytes(4, 'big') + bytes((8, 6, 0, 0, 0)))
+            + chunk(b'IDAT', zlib.compress(bytes(raw))) + chunk(b'IEND', b''))
+
+
+def _rgb(c):
+    return [int(c[i:i + 2], 16) for i in (1, 3, 5)]
+
+
+def _round_rect(root, w, h, r, fill, border=None, width=1, outside=None):
+    """둥근 사각형 이미지. outside가 없으면 모서리 바깥은 투명."""
+    key = (str(root.tk), w, h, r, fill, border, width, outside)
+    if key in _RR:
+        return _RR[key]
+    import base64
+    f, b = _rgb(fill), _rgb(border or fill)
+    o = _rgb(outside) if outside else None
+    n = 4
+
+    def pixel(x, y):
+        cov = edge = 0
+        for sy in range(n):
+            for sx in range(n):
+                X, Y = x + (sx + .5) / n, y + (sy + .5) / n
+                cx, cy = min(max(X, r), w - r), min(max(Y, r), h - r)
+                d = ((X - cx) ** 2 + (Y - cy) ** 2) ** .5
+                if d <= r:
+                    cov += 1
+                    inner = r - width
+                    dx, dy = min(X, w - X), min(Y, h - Y)
+                    if d > inner or dx < width or dy < width:
+                        edge += 1
+        t = edge / cov if cov else 0
+        col = [f[i] + (b[i] - f[i]) * t for i in range(3)]
+        a = cov / (n * n)
+        if o:
+            return [round(o[i] + (col[i] - o[i]) * a) for i in range(3)] + [255]
+        return [round(v) for v in col] + [round(255 * a)]
+    img = tk.PhotoImage(master=root, data=base64.b64encode(_png(w, h, pixel)))
+    _RR[key] = img
+    return img
+
+
+def _chevron(root, fill, color, w=22, h=16):
+    key = (str(root.tk), 'chev', fill, color)
+    if key in _RR:
+        return _RR[key]
+    import base64
+    f, c = _rgb(fill), _rgb(color)
+    pts = [(w * .30, h * .38), (w * .48, h * .62), (w * .66, h * .38)]
+
+    def dist(X, Y, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = max(0.0, min(1.0, ((X - a[0]) * dx + (Y - a[1]) * dy) / (dx * dx + dy * dy)))
+        return ((X - a[0] - t * dx) ** 2 + (Y - a[1] - t * dy) ** 2) ** .5
+
+    def pixel(x, y):
+        hit = 0
+        for sy in range(4):
+            for sx in range(4):
+                X, Y = x + (sx + .5) / 4, y + (sy + .5) / 4
+                if min(dist(X, Y, pts[0], pts[1]), dist(X, Y, pts[1], pts[2])) <= 0.8:
+                    hit += 1
+        t = hit / 16
+        return [round(f[i] + (c[i] - f[i]) * t) for i in range(3)] + [255]
+    img = tk.PhotoImage(master=root, data=base64.b64encode(_png(w, h, pixel)))
+    _RR[key] = img
+    return img
+
+
+# 버튼·입력칸은 모서리 바깥을 '스타일 바탕색'으로 칠합니다. 그래서 흰 카드 위의 위젯은
+# 'Card.' 스타일로 자동으로 바꿔 모서리가 카드 색과 맞게 합니다.
+FITTED = ('TButton', 'Primary.TButton', 'Large.TButton', 'Outline.TButton', 'Link.TButton', 'Quiet.TButton',
+          'Seg.Toolbutton', 'TEntry', 'Large.TEntry', 'TCombobox', 'TCheckbutton', 'Source.TCheckbutton')
+
+
+def _parent_bg(widget):
+    parent = widget.master
+    while parent is not None:
+        try:
+            return str(parent.cget('bg'))
+        except tk.TclError:
+            try:
+                st = parent.cget('style') or parent.winfo_class()
+                bg = ttk.Style(widget).lookup(st, 'background')
+                if bg:
+                    return str(bg)
+            except tk.TclError:
+                pass
+        parent = parent.master
+    return BG
+
+
+_FITTED_DONE = set()
+
+
+def _fit(event):
+    """위젯 모서리 바깥 색을 부모 바탕색에 맞춥니다(BG가 아니면 'BgRRGGBB.' 스타일을 만들어 씀)."""
+    w = event.widget
+    try:
+        style = str(w.cget('style')) or w.winfo_class()
+    except (tk.TclError, AttributeError):
+        return
+    base = style.split('.', 1)[1] if style.startswith(('Card.', 'Bg')) and '.' in style else style
+    if base not in FITTED:
+        return
+    bg = _parent_bg(w).upper()
+    if not bg.startswith('#') or len(bg) != 7:
+        return
+    want = base if bg == BG.upper() else f'Bg{bg[1:]}.{base}'
+    if want != base and want not in _FITTED_DONE:
+        ttk.Style(w).configure(want, background=bg)
+        _FITTED_DONE.add(want)
+    if want != style:
+        w.configure(style=want)
 
 
 def semi(root, name, size):
@@ -273,79 +407,74 @@ def apply_theme(root):
     style.configure('Number.TLabel', font=FONTS['metric'], background=CARD, foreground=INK)
     style.configure('NumberAccent.TLabel', font=FONTS['metric'], background=CARD, foreground=ACCENT)
 
-    # 버튼: 기본(흰 바탕 + 선), 주요(쪽빛), 강조선, 링크
-    pad = (px(16), px(8))
-    style.configure('TButton', padding=pad, background=CARD, foreground=INK, font=btn,
-                    bordercolor=LINE_STRONG, lightcolor=CARD, darkcolor=CARD,
-                    borderwidth=1, relief='raised', focusthickness=0, anchor='center')
-    style.map('TButton',
-              background=[('disabled', NEUTRAL_PALE), ('pressed', LINE_SOFT), ('active', HEAD)],
-              lightcolor=[('disabled', NEUTRAL_PALE), ('pressed', LINE_SOFT), ('active', HEAD)],
-              darkcolor=[('disabled', NEUTRAL_PALE), ('pressed', LINE_SOFT), ('active', HEAD)],
-              bordercolor=[('focus', ACCENT), ('active', '#B9B09D')],
-              foreground=[('disabled', '#9C9FA4')])
-    style.configure('Primary.TButton', padding=(px(22), px(10)), background=ACCENT, foreground='#FFFFFF',
-                    bordercolor=ACCENT, lightcolor=ACCENT, darkcolor=ACCENT, font=_font(root, 'button_lg', FAMILY, 10, 'bold'))
-    style.map('Primary.TButton',
-              background=[('disabled', '#AEBBCB'), ('pressed', ACCENT_PRESS), ('active', ACCENT_HOVER)],
-              lightcolor=[('disabled', '#AEBBCB'), ('pressed', ACCENT_PRESS), ('active', ACCENT_HOVER)],
-              darkcolor=[('disabled', '#AEBBCB'), ('pressed', ACCENT_PRESS), ('active', ACCENT_HOVER)],
-              bordercolor=[('disabled', '#AEBBCB'), ('focus', ACCENT_PRESS), ('active', ACCENT_HOVER)],
-              foreground=[('disabled', '#F4F6F9')])
-    style.configure('Large.TButton', padding=(px(20), px(10)))
-    style.configure('Outline.TButton', foreground=ACCENT, bordercolor=ACCENT)
-    style.map('Outline.TButton', background=[('disabled', NEUTRAL_PALE), ('pressed', ACCENT_SOFT), ('active', ACCENT_PALE)],
-              lightcolor=[('pressed', ACCENT_SOFT), ('active', ACCENT_PALE)],
-              darkcolor=[('pressed', ACCENT_SOFT), ('active', ACCENT_PALE)],
-              bordercolor=[('disabled', LINE_STRONG), ('focus', ACCENT_PRESS)],
-              foreground=[('disabled', '#9C9FA4')])
-    for name, bg in (('Link.TButton', BG), ('Quiet.TButton', CARD)):
-        style.configure(name, padding=(px(6), px(4)), background=bg, foreground=ACCENT,
-                        bordercolor=bg, lightcolor=bg, darkcolor=bg, font=label)
-        style.map(name, background=[('active', bg), ('pressed', bg)],
-                  lightcolor=[('active', bg)], darkcolor=[('active', bg)],
-                  bordercolor=[('focus', ACCENT_SOFT), ('active', bg)],
-                  foreground=[('disabled', '#9C9FA4'), ('pressed', ACCENT_PRESS), ('active', ACCENT_HOVER)])
-
-    # 점선 포커스 대신 쪽빛 테두리(bordercolor focus)로 키보드 포커스를 표시합니다.
-    style.layout('TButton', [('Button.border', {'sticky': 'nswe', 'border': '1', 'children': [
-        ('Button.padding', {'sticky': 'nswe', 'children': [('Button.label', {'sticky': 'nswe'})]})]})])
-    style.layout('Seg.Toolbutton', [('Toolbutton.border', {'sticky': 'nswe', 'children': [
+    # 버튼은 세 단계: 주요(채운 파랑) · 보조(흰 바탕 + 1px 선) · 글자(상자 없음). 모서리 반경 6.
+    R, S = px(RADIUS), px(RADIUS) * 2 + 6
+    rr = lambda fill, border=None: _round_rect(root, S, S, R, fill, border)
+    elements = {
+        'RC.Button.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('pressed', rr(LINE_SOFT, '#98A2B3')),
+                             ('focus', rr(CARD, ACCENT)), ('active', rr(HEAD, '#98A2B3'))]),
+        'RC.Primary.border': (rr(ACCENT), [('disabled', rr('#B4C0F0')), ('pressed', rr(ACCENT_PRESS)),
+                              ('focus', rr(ACCENT, ACCENT_PRESS)), ('active', rr(ACCENT_HOVER))]),
+        'RC.Seg.border': (rr(CARD, LINE_STRONG), [('disabled', rr(NEUTRAL_PALE, LINE)), ('selected', rr(ACCENT_PALE, ACCENT)),
+                          ('active', rr(HEAD, '#98A2B3'))]),
+        'RC.Entry.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('readonly', rr(FIELD, LINE)),
+                           ('focus', rr(CARD, ACCENT)), ('hover', rr(CARD, '#98A2B3'))]),
+        'RC.Combo.field': (rr(CARD, LINE_STRONG), [('disabled', rr(FIELD, LINE)), ('focus', rr(CARD, ACCENT)),
+                           ('hover', rr(CARD, '#98A2B3'))]),
+    }
+    for name, (img, states) in elements.items():
+        if name not in style.element_names():
+            spec = []
+            for st, im in states:
+                spec.append((st, im))
+            style.element_create(name, 'image', img, *spec, border=R + 2, padding=(px(2), px(1)), sticky='nsew')
+    if 'RC.Combo.arrow' not in style.element_names():
+        style.element_create('RC.Combo.arrow', 'image', _chevron(root, CARD, MUTED),
+                             ('disabled', _chevron(root, FIELD, LINE_STRONG)), sticky='')
+    label_kids = [('Button.padding', {'sticky': 'nswe', 'children': [('Button.label', {'sticky': 'nswe'})]})]
+    style.layout('TButton', [('RC.Button.border', {'sticky': 'nswe', 'children': label_kids})])
+    style.layout('Primary.TButton', [('RC.Primary.border', {'sticky': 'nswe', 'children': label_kids})])
+    style.layout('Link.TButton', label_kids)
+    style.layout('Quiet.TButton', label_kids)
+    style.layout('Seg.Toolbutton', [('RC.Seg.border', {'sticky': 'nswe', 'children': [
         ('Toolbutton.padding', {'sticky': 'nswe', 'children': [('Toolbutton.label', {'sticky': 'nswe'})]})]})])
 
-    # 검색 방식 세그먼트
-    style.configure('Seg.Toolbutton', padding=(px(12), px(7)), background=CARD, foreground=INK, font=body,
-                    bordercolor=LINE_STRONG, lightcolor=CARD, darkcolor=CARD, borderwidth=1, relief='raised', anchor='center')
-    style.map('Seg.Toolbutton',
-              background=[('disabled', NEUTRAL_PALE), ('selected', ACCENT), ('active', HEAD)],
-              lightcolor=[('disabled', NEUTRAL_PALE), ('selected', ACCENT), ('active', HEAD)],
-              darkcolor=[('disabled', NEUTRAL_PALE), ('selected', ACCENT), ('active', HEAD)],
-              bordercolor=[('selected', ACCENT), ('focus', ACCENT)],
-              foreground=[('disabled', '#9C9FA4'), ('selected', '#FFFFFF')],
-              relief=[('selected', 'raised'), ('pressed', 'raised')])
+    pad = (px(16), px(8))
+    style.configure('TButton', padding=pad, background=BG, foreground=INK, font=btn, anchor='center')
+    style.map('TButton', foreground=[('disabled', '#98A2B3')])
+    style.configure('Primary.TButton', padding=(px(22), px(10)), foreground='#FFFFFF',
+                    font=_font(root, 'button_lg', FAMILY, 10, 'bold'))
+    style.map('Primary.TButton', foreground=[('disabled', '#F4F6F9')])
+    style.configure('Large.TButton', padding=(px(20), px(10)))
+    style.configure('Outline.TButton')          # 보조 버튼과 같은 모양(버튼 종류를 세 가지로만)
+    style.configure('Link.TButton', padding=(px(6), px(4)), foreground=ACCENT, font=label)
+    style.configure('Quiet.TButton', padding=(px(6), px(4)), foreground=ACCENT, font=label)
+    for name in ('Link.TButton', 'Quiet.TButton'):
+        style.map(name, foreground=[('disabled', '#98A2B3'), ('pressed', ACCENT_PRESS), ('active', ACCENT_HOVER)])
+    style.configure('Seg.Toolbutton', padding=(px(12), px(7)), background=BG, foreground=INK, font=body, anchor='center')
+    style.map('Seg.Toolbutton', foreground=[('disabled', '#98A2B3'), ('selected', ACCENT)],
+              font=[('selected', label)])
 
-    # 입력칸
-    style.configure('TEntry', padding=(px(10), px(7)), fieldbackground=CARD, foreground=INK,
-                    bordercolor=LINE_STRONG, lightcolor=CARD, darkcolor=CARD, insertcolor=INK)
-    style.map('TEntry', bordercolor=[('focus', ACCENT)], lightcolor=[('focus', ACCENT_PALE)],
-              fieldbackground=[('disabled', FIELD), ('readonly', FIELD)], foreground=[('disabled', MUTED)])
+    # 입력칸: 둥근 테두리, 고르면 파란 테두리
+    style.layout('TEntry', [('RC.Entry.field', {'sticky': 'nswe', 'children': [
+        ('Entry.padding', {'sticky': 'nswe', 'children': [('Entry.textarea', {'sticky': 'nswe'})]})]})])
+    style.configure('TEntry', padding=(px(10), px(7)), background=BG, fieldbackground=CARD, foreground=INK, insertcolor=INK)
+    style.map('TEntry', fieldbackground=[('disabled', FIELD), ('readonly', FIELD)], foreground=[('disabled', MUTED)])
     style.configure('Large.TEntry', padding=(px(14), px(10)))
-    style.configure('TCombobox', padding=(px(10), px(6)), fieldbackground=CARD, background=CARD, foreground=INK,
-                    bordercolor=LINE_STRONG, lightcolor=CARD, darkcolor=CARD, arrowcolor=MUTED, arrowsize=px(12))
+    style.layout('TCombobox', [('RC.Combo.field', {'sticky': 'nswe', 'children': [
+        ('RC.Combo.arrow', {'side': 'right', 'sticky': 'e'}),
+        ('Combobox.padding', {'sticky': 'nswe', 'children': [('Combobox.textarea', {'sticky': 'nswe'})]})]})])
+    style.configure('TCombobox', padding=(px(10), px(6), px(4), px(6)), background=BG, fieldbackground=CARD, foreground=INK)
     style.map('TCombobox', fieldbackground=[('readonly', CARD), ('disabled', FIELD)],
-              background=[('active', HEAD), ('readonly', CARD)],
-              bordercolor=[('focus', ACCENT), ('active', '#B9B09D')],
               foreground=[('readonly', INK), ('disabled', MUTED)],
-              selectbackground=[('readonly', CARD)], selectforeground=[('readonly', INK)],
-              arrowcolor=[('disabled', LINE_STRONG)])
+              selectbackground=[('readonly', CARD)], selectforeground=[('readonly', INK)])
 
     # 체크박스
-    for name, bg in (('TCheckbutton', CARD), ('Source.TCheckbutton', CARD)):
+    for name, bg in (('TCheckbutton', BG), ('Source.TCheckbutton', BG)):
         style.configure(name, background=bg, foreground=INK, padding=(0, px(2)), indicatormargin=(0, 0, px(10), 0),
                         indicatorsize=px(16), indicatorbackground=CARD, indicatorforeground='#FFFFFF',
                         upperbordercolor=LINE_STRONG, lowerbordercolor=LINE_STRONG, focuscolor=bg)
-        style.map(name, background=[('active', bg)],
-                  indicatorbackground=[('disabled', NEUTRAL_PALE), ('selected', ACCENT), ('active', ACCENT_PALE)],
+        style.map(name, indicatorbackground=[('disabled', NEUTRAL_PALE), ('selected', ACCENT), ('active', ACCENT_PALE)],
                   upperbordercolor=[('selected', ACCENT)], lowerbordercolor=[('selected', ACCENT)],
                   foreground=[('disabled', MUTED)])
     style.configure('Source.TCheckbutton', font=FONTS['h3'])
@@ -356,7 +485,7 @@ def apply_theme(root):
             'hover': _check_image(root, size, gap, ACCENT_PALE, ACCENT, None),
             'on': _check_image(root, size, gap, ACCENT, ACCENT, '#FFFFFF'),
             'off_dis': _check_image(root, size, gap, NEUTRAL_PALE, LINE, None),
-            'on_dis': _check_image(root, size, gap, '#AEBBCB', '#AEBBCB', '#FFFFFF'),
+            'on_dis': _check_image(root, size, gap, '#B4C0F0', '#B4C0F0', '#FFFFFF'),
         })
         style.element_create('RC.Check.indicator', 'image', imgs['off'],
                              ('disabled', 'selected', imgs['on_dis']), ('selected', imgs['on']),
@@ -372,21 +501,17 @@ def apply_theme(root):
         style.layout(f'{orient}.TScrollbar', [
             (f'{orient}.Scrollbar.trough', {'sticky': trough, 'children': [
                 (f'{orient}.Scrollbar.thumb', {'expand': '1', 'sticky': thumb})]})])
-        style.configure(f'{orient}.TScrollbar', troughcolor=BG, background='#D3CCBD', bordercolor=BG,
-                        lightcolor='#D3CCBD', darkcolor='#D3CCBD', arrowsize=px(10), gripcount=0, relief='flat')
-        style.map(f'{orient}.TScrollbar', background=[('pressed', '#A99F8A'), ('active', '#BDB4A2')],
-                  lightcolor=[('pressed', '#A99F8A'), ('active', '#BDB4A2')],
-                  darkcolor=[('pressed', '#A99F8A'), ('active', '#BDB4A2')])
+        style.configure(f'{orient}.TScrollbar', troughcolor=BG, background='#D0D5DD', bordercolor=BG,
+                        lightcolor='#D0D5DD', darkcolor='#D0D5DD', arrowsize=px(10), gripcount=0, relief='flat')
+        style.map(f'{orient}.TScrollbar', background=[('pressed', '#98A2B3'), ('active', '#B4BBC6')],
+                  lightcolor=[('pressed', '#98A2B3'), ('active', '#B4BBC6')],
+                  darkcolor=[('pressed', '#98A2B3'), ('active', '#B4BBC6')])
     style.configure('Card.Vertical.TScrollbar', troughcolor=CARD, bordercolor=CARD)
 
     # 탭, 표
-    style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(px(4), px(6), px(4), 0))
-    style.configure('TNotebook.Tab', padding=(px(18), px(9)), background=NEUTRAL_PALE, bordercolor=LINE)
-    # 고른 탭은 더 크고 굵게(clam 기본값은 고른 탭을 오히려 작게 만듭니다)
-    style.map('TNotebook.Tab', background=[('selected', CARD), ('active', '#ECE8DF')],
-              foreground=[('selected', ACCENT)], font=[('selected', FONTS['label'])],
-              padding=[('selected', (px(22), px(12)))], expand=[('selected', (px(3), px(4), px(3), 0))],
-              lightcolor=[('selected', ACCENT)], bordercolor=[('selected', ACCENT)])
+    style.configure('TNotebook', background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+    style.configure('TNotebook.Tab', padding=(px(18), px(10)), background=BG, foreground=MUTED, font=label)
+    style.map('TNotebook.Tab', foreground=[('selected', ACCENT), ('active', INK)])
     _install_tabs(root, style)
     style.configure('Treeview', background=CARD, fieldbackground=CARD, foreground=INK, rowheight=px(34),
                     borderwidth=0, bordercolor=CARD, lightcolor=CARD, darkcolor=CARD, font=body)
@@ -396,12 +521,16 @@ def apply_theme(root):
                     bordercolor=LINE, lightcolor=HEAD, darkcolor=HEAD)
     style.map('Treeview.Heading', background=[('active', LINE_SOFT)], lightcolor=[('active', LINE_SOFT)],
               darkcolor=[('active', LINE_SOFT)], relief=[('pressed', 'flat')])
-    style.map('Treeview', background=[('selected', ACCENT)], foreground=[('selected', '#FFFFFF')])
+    style.map('Treeview', background=[('selected', ACCENT_SOFT)], foreground=[('selected', INK)])
 
     style.configure('Horizontal.TProgressbar', troughcolor=LINE, background=ACCENT, bordercolor=LINE,
                     lightcolor=ACCENT, darkcolor=ACCENT, thickness=px(4), borderwidth=0)
     style.configure('TPanedwindow', background=BG)
     style.configure('Sash', sashthickness=px(12), background=BG, bordercolor=BG, lightcolor=BG, darkcolor=BG, gripcount=0)
+    for cls in ('TButton', 'TRadiobutton', 'TEntry', 'TCombobox', 'TCheckbutton'):
+        root.bind_class(cls, '<Map>', _fit, add='+')
+    for base in FITTED:
+        style.configure('Card.' + base, background=CARD)
     _install_ime_font(root)
     _THEMED.add(str(root.tk))
     return style
@@ -488,10 +617,41 @@ def _install_ime_font(root):
 
 # ── 화면 조립 도우미 ─────────────────────────────────────────
 
+def round_corners(frame, radius=8, border=LINE, inner=None):
+    """평면 상자의 네 모서리를 둥글게: 모서리마다 (바깥 = 부모 바탕색) 작은 그림을 덮습니다."""
+    def paint(_=None, force=False):
+        if getattr(frame, '_corners', None):
+            if not force:
+                return
+            for lab in frame._corners:
+                lab.destroy()
+        try:
+            outside = str(frame.master.cget('bg'))
+        except tk.TclError:
+            outside = BG
+        fill = inner or str(frame.cget('bg'))
+        r = px(radius)
+        full = _round_rect(frame, r * 2 + 2, r * 2 + 2, r, fill, border or fill, 1, outside)
+        frame._corners = []
+        for i, (relx, rely, anchor) in enumerate(((0, 0, 'nw'), (1, 0, 'ne'), (0, 1, 'sw'), (1, 1, 'se'))):
+            part = tk.PhotoImage(master=frame)
+            x0 = 0 if relx == 0 else r + 2
+            y0 = 0 if rely == 0 else r + 2
+            part.tk.call(part, 'copy', full, '-from', x0, y0, x0 + r, y0 + r)
+            lab = tk.Label(frame, image=part, bd=0, highlightthickness=0, bg=fill)
+            lab.image = part
+            lab.place(relx=relx, rely=rely, anchor=anchor, bordermode='outside')
+            frame._corners.append(lab)
+    frame.bind('<Map>', paint, add='+')
+    frame.refresh_corners = lambda: paint(force=True) if frame.winfo_ismapped() or getattr(frame, '_corners', None) else None
+    return frame
+
+
 def card(parent, padx=22, pady=20, bg=CARD):
-    """흰 카드: 1px 테두리를 가진 평면 상자."""
-    return tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE,
-                    padx=px(padx), pady=px(pady))
+    """흰 카드: 1px 테두리 + 둥근 모서리(반경 8)."""
+    box = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=LINE, highlightcolor=LINE,
+                   padx=px(padx), pady=px(pady))
+    return round_corners(box)
 
 
 def hline(parent, color=LINE_SOFT, bg=None):
@@ -519,7 +679,7 @@ def placeholder(widget, text, variable=None):
     """입력칸 안의 흐린 안내 문구. 값이 아니라 위에 겹친 글자라서, 입력하거나 칸을 누르면 사라집니다."""
     is_text = isinstance(widget, tk.Text)
     bg = widget.cget('bg') if is_text else CARD
-    hint = tk.Label(widget.master, text=text, bg=bg, fg='#9C9FA4', justify='left', anchor='nw',
+    hint = tk.Label(widget.master, text=text, bg=bg, fg='#98A2B3', justify='left', anchor='nw',
                     font=widget.cget('font') if is_text else FONTS['input_lg'], cursor='xterm')
 
     def empty():
@@ -627,7 +787,7 @@ class _Tip:
             win.wm_attributes('-topmost', True)
         except tk.TclError:
             pass
-        tk.Label(win, text=text, bg='#FFFDF5', fg=INK, font=FONTS.get('small'), justify='left', anchor='w',
+        tk.Label(win, text=text, bg='#FFFFFF', fg=INK, font=FONTS.get('small'), justify='left', anchor='w',
                  wraplength=px(380), padx=px(10), pady=px(7), relief='solid', bd=1).pack()
         win.update_idletasks()
         sw = win.winfo_screenwidth()
