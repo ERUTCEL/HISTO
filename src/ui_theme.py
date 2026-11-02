@@ -106,6 +106,9 @@ def fit_geometry(window, width, height, min_width, min_height):
 
 def _font(root, name, family, size, weight='normal'):
     full = 'rc_' + name
+    # Windows에서 마루부리 굵은 글씨는 따로 이름이 있는 글꼴('MaruBuriOTF Bold') — 가짜 굵게 대신 진짜 굵은 글꼴
+    if weight == 'bold' and family == SERIF[0] and SERIF_BOLD[0] and SERIF_BOLD[1] == 'normal':
+        family, weight = SERIF_BOLD[0], 'normal'
     try:
         f = tkfont.Font(root=root, name=full, family=family, size=size, weight=weight, exists=False)
     except tk.TclError:
@@ -132,6 +135,9 @@ def _pick_family(root):
             FAMILY = name
             break
     FAMILY_SEMI = 'Pretendard SemiBold' if 'Pretendard SemiBold' in families else None
+    if SERIF[0]:   # 마루부리가 있으면 앱 전체(버튼·표·입력칸 포함)를 마루부리로
+        FAMILY = SERIF[0]
+        FAMILY_SEMI = 'MaruBuriOTF SemiBold' if 'MaruBuriOTF SemiBold' in families else None
     for name in ('D2Coding', 'Consolas', 'Cascadia Mono', 'DejaVu Sans Mono'):
         if name in families:
             MONO = name
