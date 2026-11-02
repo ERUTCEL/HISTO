@@ -179,18 +179,18 @@ class QueueStream:
 
 
 class NavItem(tk.Frame):
-    """사이드바 메뉴 한 줄: 고른 메뉴는 둥근 연파랑 바탕 + 파란 글자."""
+    """사이드바 메뉴 한 줄. 고른 메뉴는 흰 바탕(둥근 모서리) + 먹청 글자."""
 
     def __init__(self, parent, text, command):
-        super().__init__(parent, bg=NAV, cursor='hand2', height=px(44))
+        super().__init__(parent, bg=NAV, cursor='hand2', height=px(38))
         self.pack_propagate(False)
         self.active = False
         self.command = command
-        self.bar = tk.Frame(self, width=px(3), bg=NAV)   # 예전 표시선(지금은 둥근 바탕으로 표시)
+        self.bar = tk.Frame(self, width=px(3), bg=NAV)
         self.label = tk.Label(self, text=text, bg=NAV, fg=NAV_TEXT, font=ui.FONTS['body'], anchor='w', padx=px(12))
         self.label.pack(side='left', fill='both', expand=True)
         ui.round_corners(self, 6, border=None)
-        for widget in (self, self.label, self.bar):
+        for widget in (self, self.label):
             widget.bind('<Button-1>', lambda e: self.command())
             widget.bind('<Enter>', lambda e: self._hover(True))
             widget.bind('<Leave>', lambda e: self._hover(False))
@@ -205,8 +205,6 @@ class NavItem(tk.Frame):
         self.configure(bg=bg)
         self.label.configure(bg=bg)
         self.refresh_corners()
-        if not self.active:
-            self.bar.configure(bg=bg)
 
     def set_active(self, active):
         self.active = active
@@ -246,7 +244,7 @@ class App(tk.Tk):
         self.main.pack(side='left', fill='both', expand=True)
         self._build_statusbar()
         header = tk.Frame(self.main, bg=BG)
-        header.pack(fill='x', padx=px(40), pady=(px(30), px(18)))
+        header.pack(fill='x', padx=px(28), pady=(px(24), px(14)))
         self.page_title = tk.StringVar(value='통합 검색')
         self.page_lead = tk.StringVar()
         heads = tk.Frame(header, bg=BG)
@@ -269,7 +267,7 @@ class App(tk.Tk):
         upd()
 
         self.pages_box = tk.Frame(self.main, bg=BG)
-        self.pages_box.pack(fill='both', expand=True, padx=px(40), pady=(0, px(20)))
+        self.pages_box.pack(fill='both', expand=True, padx=px(28), pady=(0, px(16)))
         self.pages = {name: tk.Frame(self.pages_box, bg=BG) for name, _, _ in PAGES}
         self._build_search(self.pages['search'])
         self._build_sources(self.pages['sources'])
@@ -296,32 +294,31 @@ class App(tk.Tk):
     # ── 사이드바 · 상태 표시줄 ─────────────────────────────
 
     def _build_sidebar(self):
-        side = tk.Frame(self, bg=NAV, width=px(224))
+        side = tk.Frame(self, bg=NAV, width=px(200))
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
-        tk.Frame(self, bg=LINE, width=1).pack(side='left', fill='y')
+        tk.Frame(self, bg=NAV_LINE, width=1).pack(side='left', fill='y')
         brand = tk.Frame(side, bg=NAV)
-        brand.pack(fill='x', padx=px(26), pady=(px(26), 0))
+        brand.pack(fill='x', padx=px(22), pady=(px(22), 0))
         import logo_data
-        self._logo = logo_data.image(self, px(42))
+        self._logo = logo_data.image(self, px(40))
         tk.Label(brand, image=self._logo, bg=NAV, bd=0).pack(anchor='w')
 
         menu = tk.Frame(side, bg=NAV)
-        menu.pack(fill='x', padx=px(14), pady=(px(36), 0))
+        menu.pack(fill='x', padx=px(10), pady=(px(26), 0))
         self.nav_buttons = {}
         for key, label, _ in PAGES:
             item = NavItem(menu, label, lambda k=key: self.show_page(k))
-            item.pack(fill='x', pady=(0, px(4)))
+            item.pack(fill='x', pady=(0, px(2)))
             self.nav_buttons[key] = item
 
-
     def _build_statusbar(self):
-        bar = tk.Frame(self.main, bg=SURFACE_ALT, height=px(40))
+        bar = tk.Frame(self.main, bg=SURFACE_ALT, height=px(30))
         bar.pack(side='bottom', fill='x')
         bar.pack_propagate(False)
         ui.hline(bar, LINE).pack(side='top', fill='x')
         inner = tk.Frame(bar, bg=SURFACE_ALT)
-        inner.pack(fill='both', expand=True, padx=px(40))
+        inner.pack(fill='both', expand=True, padx=px(28))
         self.status_mark = ui.dot(inner, OK, SURFACE_ALT)
         self.status_mark.pack(side='left', padx=(0, px(10)))
         self.progress = ttk.Progressbar(inner, mode='indeterminate', length=px(180))
@@ -342,15 +339,26 @@ class App(tk.Tk):
     # ── 통합 검색 ──────────────────────────────────────────
 
     def _build_search(self, page):
+        """기능별 두 패널 + 실행 줄.
+        위 패널 = 무엇을(연구 대상 · 검색어) | 어디서(자료원),  아래 패널 = 어떻게(검색 방식 · 범위),  맨 아래 = 실행."""
         scroller = ui.ScrollFrame(page)
         scroller.pack(fill='both', expand=True)
         page = scroller.body
 
-        card = ui.card(page, 28, 24)
-        card.pack(fill='x')
-        tk.Label(card, text='연구 대상', bg=CARD, fg=INK, font=ui.FONTS['h2']).pack(anchor='w')
-        row = tk.Frame(card, bg=CARD)
-        row.pack(fill='x', pady=(px(8), px(6)))
+        # ── 패널 1: 검색 대상과 자료원 ──
+        panel = ui.card(page, 22, 20)
+        panel.pack(fill='x')
+        panel.columnconfigure(0, weight=3, uniform='col')
+        panel.columnconfigure(1, weight=2, uniform='col')
+        left = tk.Frame(panel, bg=CARD)
+        left.grid(row=0, column=0, sticky='nsew', padx=(0, px(16)))
+        tk.Frame(panel, bg=ui.LINE_SOFT, width=1).grid(row=0, column=1, sticky='nsw')
+        right = tk.Frame(panel, bg=CARD)
+        right.grid(row=0, column=1, sticky='nsew', padx=(px(20), 0))
+
+        ui.section(left, '연구 대상').pack(fill='x')
+        row = tk.Frame(left, bg=CARD)
+        row.pack(fill='x', pady=(px(8), 0))
         self.target_entry = ttk.Entry(row, textvariable=self.target, font=ui.FONTS['input_lg'], style='Large.TEntry')
         self.target_entry.pack(side='left', fill='x', expand=True)
         self.target_entry.bind('<Return>', self._target_enter)
@@ -358,100 +366,106 @@ class App(tk.Tk):
         for key in ('<Control-f>', '<Control-F>'):
             self.bind(key, self._focus_target)
         ui.placeholder(self.target_entry, '인물·사건·제도 이름  (예: 숙빈 최씨, 대동법, 장희빈)', variable=self.target)
-        self.target_button = ttk.Button(row, text='대상 적용', style='Outline.TButton', command=self.apply_target, cursor='hand2')
-        self.target_button.pack(side='left', fill='y', padx=(px(10), 0))
+        self.target_button = ttk.Button(row, text='대상 적용', command=self.apply_target, cursor='hand2')
+        self.target_button.pack(side='left', fill='y', padx=(px(8), 0))
         ui.tip(self.target_entry, '인물·사건·제도 이름을 쓰고 Enter → 다른 이름·한자 표기를 검색어 칸에 채웁니다.\n한 번 더 Enter → 검색을 시작합니다.')
         ui.tip(self.target_button, '다른 이름·한자 표기를 검색어 칸에 채웁니다(Enter와 같음).')
 
-        cols = tk.Frame(card, bg=CARD)
-        cols.pack(fill='x', pady=(px(20), 0))
-        cols.columnconfigure(0, weight=1, uniform='col')
-        cols.columnconfigure(1, weight=1, uniform='col')
-        left = tk.Frame(cols, bg=CARD)
-        left.grid(row=0, column=0, sticky='nsew', padx=(0, px(14)))
-        head = tk.Frame(left, bg=CARD)
-        head.pack(fill='x')
-        tk.Label(head, text='검색어와 별칭', bg=CARD, fg=INK, font=ui.FONTS['label']).pack(side='left')
-        self.terms = tk.Text(left, height=4, font=ui.FONTS['input'], wrap='word', relief='flat', bg=FIELD, fg=INK,
-                             insertbackground=INK, padx=px(12), pady=px(9), spacing1=px(2), spacing3=px(2),
-                             highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
+        terms_head = ui.section(left, '검색어 · 다른 이름')
+        terms_head.pack(fill='x', pady=(px(18), 0))
+        ui.keycap(terms_head.right, 'F9', '한자 변환').pack(side='right')
+        self.terms = tk.Text(left, height=5, font=ui.FONTS['input'], wrap='word', relief='flat', bg=FIELD, fg=INK,
+                             insertbackground=INK, padx=px(12), pady=px(8), spacing1=px(2), spacing3=px(2),
+                             highlightthickness=1, highlightbackground=LINE_STRONG, highlightcolor=ACCENT,
                              selectbackground=ACCENT, selectforeground='white')
-        self.terms.pack(fill='x', pady=(px(8), 0))
+        self.terms.pack(fill='both', expand=True, pady=(px(8), 0))
         self.terms.bind('<Button-3>', hanja_input._context_menu)
         ui.placeholder(self.terms, '연구 대상을 적용하면 이름과 별칭이 채워집니다. 직접 적어도 됩니다.\n예: 숙빈 최씨\n淑嬪崔氏')
-        ui.tip(self.terms, '한 줄에 하나씩 적습니다. 한자는 한글로 친 뒤 F9(또는 오른쪽 클릭 → 한자로 바꾸기).')
 
-        right = tk.Frame(cols, bg=CARD)
-        right.grid(row=0, column=1, sticky='nsew', padx=(px(14), 0))
-        tk.Label(right, text='검색 방식', bg=CARD, fg=INK, font=ui.FONTS['label']).pack(anchor='w')
-        seg = tk.Frame(right, bg=CARD)
-        seg.pack(fill='x', pady=(px(8), px(8)))
+        self._build_site_picker(right)
+
+        # ── 패널 2: 검색 방식 ──
+        how = ui.card(page, 22, 18)
+        how.pack(fill='x', pady=(px(14), 0))
+        how_head = ui.section(how, '검색 방식')
+        how_head.pack(fill='x')
+        self.depth = tk.StringVar(value=DEPTHS[1][0])
+        self.depth_box = ttk.Combobox(how_head.right, textvariable=self.depth, values=[d for d, _ in DEPTHS], state='disabled', width=18)
+        self.depth_box.pack(side='right')
+        tk.Label(how_head.right, text='검색 범위', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='right', padx=(0, px(8)))
+        self.depth_box.bind('<<ComboboxSelected>>', lambda e: settings.save(depth=self.depth.get()))
+        ui.tip(self.depth_box, '사이트마다 검색 결과를 몇 쪽까지 볼지 정합니다. \'목록만\'·\'전체 수집\'에만 쓰입니다.')
+        modes = tk.Frame(how, bg=CARD)
+        modes.pack(fill='x', pady=(px(10), 0))
         self.mode_buttons = []
         for i, (value, label) in enumerate(MODES):
-            seg.columnconfigure(i % 3, weight=1, uniform='seg')
-            b = ttk.Radiobutton(seg, text=label, value=value, variable=self.mode, style='Seg.Toolbutton',
+            modes.columnconfigure(i, weight=1, uniform='mode')
+            b = ttk.Radiobutton(modes, text=label, value=value, variable=self.mode, style='Seg.Toolbutton',
                                 command=self._mode_picked, cursor='hand2')
-            b.grid(row=i // 3, column=i % 3, sticky='nsew', padx=(0, px(6)), pady=(0, px(6)))
+            b.grid(row=0, column=i, sticky='ew', padx=(0, px(6) if i < len(MODES) - 1 else 0))
             ui.tip(b, MODE_HINTS.get(value, ''))
             self.mode_buttons.append(b)
         self.mode_select = self.mode_buttons[0]
-        depth = tk.Frame(right, bg=CARD)
-        depth.pack(fill='x', pady=(px(8), 0))
-        tk.Label(depth, text='검색 범위', bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(side='left', padx=(0, px(8)))
-        self.depth = tk.StringVar(value=DEPTHS[1][0])
-        self.depth_box = ttk.Combobox(depth, textvariable=self.depth, values=[d for d, _ in DEPTHS], state='disabled', width=22)
-        self.depth_box.pack(side='left')
-        self.depth_box.bind('<<ComboboxSelected>>', lambda e: settings.save(depth=self.depth.get()))
-        ui.tip(self.depth_box, '사이트마다 검색 결과를 몇 쪽까지 볼지 정합니다. \'목록만\'·\'전체 수집\'에만 쓰입니다.')
-
-        self._build_site_picker(card)
 
         # 저장 위치는 여기서 고르지 않습니다: 검색 결과는 '임시 검색결과'에 담기고, 결과 창의 '이 검색 저장'에서 위치를 묻습니다.
-
+        # ── 실행: 주요 동작은 '통합 검색 시작' 하나 ──
         buttons = tk.Frame(page, bg=BG)
-        buttons.pack(fill='x', pady=(px(16), px(10)))
+        buttons.pack(fill='x', pady=(px(18), px(6)))
         self.start_button = ttk.Button(buttons, text='통합 검색 시작', style='Primary.TButton', command=self.start, cursor='hand2')
         self.start_button.pack(side='left')
-        self.stop_button = ttk.Button(buttons, text='중단 후 저장', style='Large.TButton', command=self.stop, cursor='hand2')
-        self.stop_button.pack(side='left', padx=(px(10), 0))
-        ttk.Button(buttons, textvariable=self.source_summary, style='Link.TButton', cursor='hand2',
-                   command=lambda: self.show_page('sources')).pack(side='left', padx=(px(10), 0))
-        ttk.Button(buttons, text='문헌 결과 보기  →', style='Large.TButton', command=self.view, cursor='hand2').pack(side='right')
-        self.reset_button = ttk.Button(buttons, text='↺ 검색 초기화', style='Link.TButton', command=self.reset_search, cursor='hand2')
-        self.reset_button.pack(side='right', padx=(0, px(10)))
+        self.stop_button = ttk.Button(buttons, text='중단 후 저장', command=self.stop, cursor='hand2')
+        self.stop_button.pack(side='left', fill='y', padx=(px(8), 0))
+        ttk.Button(buttons, text='문헌 결과 보기  →', command=self.view, cursor='hand2').pack(side='right', fill='y')
+        self.reset_button = ttk.Button(buttons, text='↺ 검색 초기화', style='Tool.TButton', command=self.reset_search, cursor='hand2')
+        self.reset_button.pack(side='right', padx=(0, px(8)))
         ui.tip(self.start_button, '검색 결과는 \'임시 검색결과\'에 담기고, 끝나면 결과 창이 열립니다.\n새 검색을 하면 바뀌니 남기려면 결과 창의 \'이 검색 저장\'을 쓰세요.')
         ui.tip(self.stop_button, '지금 받는 요청까지 끝내고 모은 것을 저장한 뒤 멈춥니다.')
         ui.tip(self.reset_button, '연구 대상과 검색어 칸을 비웁니다.')
 
-    def _build_site_picker(self, card):
-        """검색 화면에서 바로 검색할 사이트를 고르는 체크 칸(자료원 연결 화면과 같은 선택을 함께 씁니다)."""
-        ui.hline(card).pack(fill='x', pady=(px(20), px(14)))
-        head = tk.Frame(card, bg=CARD)
+    def _build_site_picker(self, box):
+        """자료원: 두 줄 격자. 머리줄에 선택 수와 모두 선택·해제."""
+        head = ui.section(box, '자료원')
         head.pack(fill='x')
-        tk.Label(head, text='검색할 사이트', bg=CARD, fg=INK, font=ui.FONTS['label']).pack(side='left')
-        ttk.Button(head, text='사이트 설명 →', style='Link.TButton', cursor='hand2',
-                   command=lambda: self.show_page('sources')).pack(side='right')
-        ttk.Button(head, text='모두 해제', style='Link.TButton', cursor='hand2',
-                   command=lambda: self.select_sources(False)).pack(side='right', padx=(0, px(8)))
-        ttk.Button(head, text='모두 선택', style='Link.TButton', cursor='hand2',
-                   command=lambda: self.select_sources(True)).pack(side='right', padx=(0, px(8)))
+        ttk.Button(head.right, text='모두 해제', style='Link.TButton', cursor='hand2',
+                   command=lambda: self.select_sources(False)).pack(side='right')
+        ttk.Button(head.right, text='모두 선택', style='Link.TButton', cursor='hand2',
+                   command=lambda: self.select_sources(True)).pack(side='right')
         groups = (('앱에 모으기', [x for x in SOURCES if x.mode != 'official']),
                   ('공식 사이트 함께 열기', [x for x in SOURCES if x.mode == 'official']))
-        per_row = 4
-        for title, items in groups:
-            box = tk.Frame(card, bg=CARD)
-            box.pack(fill='x', pady=(px(8), 0))
-            tk.Label(box, text=title, bg=CARD, fg=MUTED, font=ui.FONTS['small'], width=16, anchor='nw').grid(
-                row=0, column=0, rowspan=2, sticky='nw', pady=(px(2), 0))
-            for c in range(per_row):
-                box.columnconfigure(c + 1, weight=1, uniform='site')
-            for i, source in enumerate(items):
-                check = ttk.Checkbutton(box, text=source.name, variable=self.source_vars[source.id],
+        grids = []
+        for gi, (title, items) in enumerate(groups):
+            tk.Label(box, text=title, bg=CARD, fg=MUTED, font=ui.FONTS['small']).pack(anchor='w', pady=(px(8 if gi == 0 else 12), px(4)))
+            lst = tk.Frame(box, bg=CARD)
+            lst.pack(fill='x')
+            checks = []
+            for source in items:
+                check = ttk.Checkbutton(lst, text=source.name, variable=self.source_vars[source.id],
                                         command=self.sources_changed, cursor='hand2')
-                check.grid(row=i // per_row, column=i % per_row + 1, sticky='w', padx=(0, px(10)), pady=(0, px(2)))
                 ui.tip(check, source.description + ('\n앱이 자료를 가져오지 않고, 체크해 두면 검색할 때 이 사이트 검색 화면을 브라우저로 엽니다.'
                                                     if source.mode == 'official' else ''))
                 self.source_checks.append(check)
+                checks.append(check)
+            grids.append((lst, checks))
+
+        def regrid(event=None, state={'cols': 0}):
+            # 패널이 좁으면 한 줄에 하나, 넓으면 두 줄 격자(사이트 이름이 잘리지 않게)
+            widest = max(c.winfo_reqwidth() for _, cs in grids for c in cs)
+            cols = 2 if box.winfo_width() >= widest * 2 + px(16) else 1
+            if cols == state['cols']:
+                return
+            state['cols'] = cols
+            for lst, checks in grids:
+                for c in range(2):
+                    lst.columnconfigure(c, weight=1 if c < cols else 0, uniform='site' if c < cols else '')
+                for i, check in enumerate(checks):
+                    check.grid(row=i // cols, column=i % cols, sticky='w', padx=(0, px(8)), pady=(0, px(5)))
+        box.bind('<Configure>', regrid, add='+')
+        regrid()
+        foot = tk.Frame(box, bg=CARD)
+        foot.pack(fill='x', pady=(px(6), 0))
+        ttk.Button(foot, textvariable=self.source_summary, style='Link.TButton', cursor='hand2',
+                   command=lambda: self.show_page('sources')).pack(side='left')
+        ui.tip(foot.winfo_children()[-1], '사이트별 설명과 연결 상태(자료원 연결 화면)')
 
     # ── 자료원 연결 ────────────────────────────────────────
 
@@ -509,7 +523,7 @@ class App(tk.Tk):
         for key, label, width in (('title', '최근 저장된 문헌', 520), ('source', '자료원', 170), ('state', '보관 상태', 110)):
             self.recent.heading(key, text=label, anchor='w')
             self.recent.column(key, width=px(width), stretch=key == 'title', anchor='w')
-        self.recent.tag_configure('odd', background='#F9FAFB')
+        self.recent.tag_configure('odd', background=ui.ROW_ALT)
         self.recent.tag_configure('even', background=CARD)
         scroll = ttk.Scrollbar(table, orient='vertical', command=self.recent.yview, style='Card.Vertical.TScrollbar')
         self.recent.configure(yscrollcommand=scroll.set)
@@ -566,7 +580,7 @@ class App(tk.Tk):
                                   ('year', '연대', 56), ('cat', '분류', 110), ('saved', '저장일', 78)):
             self.fav_items.heading(key, text=label, anchor='w')
             self.fav_items.column(key, width=px(width), stretch=key == 'title', anchor='w')
-        self.fav_items.tag_configure('odd', background='#F9FAFB')
+        self.fav_items.tag_configure('odd', background=ui.ROW_ALT)
         sc = ttk.Scrollbar(table, orient='vertical', command=self.fav_items.yview, style='Card.Vertical.TScrollbar')
         self.fav_items.configure(yscrollcommand=sc.set)
         sc.pack(side='right', fill='y')
@@ -890,7 +904,7 @@ class App(tk.Tk):
         official = len(self.selected_official())
         self.stats['selected'].set(str(count))
         extra = f' + 공식 사이트 {official}곳' if official else ''
-        self.source_summary.set(f'자료원 {count}곳{extra} 선택됨 · 변경' if count or official else '자료원을 선택하세요 →')
+        self.source_summary.set(f'{count}곳{extra} 선택 · 설명 →' if count or official else '자료원을 선택하세요 →')
         if not getattr(self, '_loading', True):
             settings.save(sources=[s.id for s in SOURCES if self.source_vars[s.id].get()])
 
@@ -1154,7 +1168,7 @@ class App(tk.Tk):
             self.mode_changed()
         else:
             self.depth_box.configure(state='disabled')
-        self.terms.configure(state=state, bg=FIELD if enabled else '#F2F4F7')
+        self.terms.configure(state=state, bg=FIELD if enabled else ui.NEUTRAL_PALE)
         for check in self.source_checks:
             check.configure(state=state)
 
