@@ -63,6 +63,9 @@ FONTS = {}
 FAMILY = '맑은 고딕'
 FAMILY_SEMI = None
 MONO = 'Consolas'
+# 제목·원문 읽기용 부리 글꼴(마루부리, 앱에 내장). (글꼴 이름, 굵기)
+SERIF = (None, 'normal')
+SERIF_BOLD = (None, 'bold')
 
 
 def resource_dir():
@@ -113,8 +116,17 @@ def _font(root, name, family, size, weight='normal'):
 
 
 def _pick_family(root):
-    global FAMILY, FAMILY_SEMI, MONO
+    global FAMILY, FAMILY_SEMI, MONO, SERIF, SERIF_BOLD
     families = set(tkfont.families(root))
+    # Windows는 굵기마다 다른 이름('MaruBuriOTF Bold'), 리눅스·맥은 한 이름 + 굵기
+    if 'MaruBuriOTF Regular' in families:
+        SERIF = ('MaruBuriOTF Regular', 'normal')
+    elif 'MaruBuriOTF' in families:
+        SERIF = ('MaruBuriOTF', 'normal')
+    if 'MaruBuriOTF Bold' in families:
+        SERIF_BOLD = ('MaruBuriOTF Bold', 'normal')
+    elif 'MaruBuriOTF' in families:
+        SERIF_BOLD = ('MaruBuriOTF', 'bold')
     for name in ('Pretendard', 'Pretendard Variable', '맑은 고딕', 'Malgun Gothic', 'Noto Sans CJK KR', 'Noto Sans KR'):
         if name in families:
             FAMILY = name
@@ -365,15 +377,17 @@ def apply_theme(root):
             pass
     body = _font(root, 'body', FAMILY, 10)
     small = _font(root, 'small', FAMILY, 9)
-    _font(root, 'reading', FAMILY, 11)
-    _font(root, 'reading_b', FAMILY, 11, 'bold')
+    serif, serif_w = SERIF if SERIF[0] else (FAMILY, 'normal')
+    serif_b, serif_bw = SERIF_BOLD if SERIF_BOLD[0] else (FAMILY, 'bold')
+    _font(root, 'reading', serif, 11, serif_w)
+    _font(root, 'reading_b', serif_b, 11, serif_bw)
     _font(root, 'small_b', FAMILY, 9, 'bold')
     _font(root, 'input', FAMILY, 11)
     _font(root, 'input_lg', FAMILY, 14)
-    _font(root, 'h1', FAMILY, 19, 'bold')
+    _font(root, 'h1', serif_b, 19, serif_bw)
     _font(root, 'h2', FAMILY, 12, 'bold')
     _font(root, 'h3', FAMILY, 11, 'bold')
-    _font(root, 'title', FAMILY, 15, 'bold')
+    _font(root, 'title', serif_b, 15, serif_bw)
     _font(root, 'metric', FAMILY, 19, 'bold')
     _font(root, 'brand', FAMILY, 13, 'bold')
     _font(root, 'seal', FAMILY, 17, 'bold')
