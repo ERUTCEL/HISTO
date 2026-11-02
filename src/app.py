@@ -285,10 +285,11 @@ class App(tk.Tk):
         self.after(900, lambda: self._offer_old_cleanup())
 
     def _set_icon(self):
+        # 창 제목줄·작업 표시줄 아이콘: 먹 글씨 'h'. default=True라 결과 창 등 새 창에도 같이 쓰입니다.
         try:
-            icon = ui.resource_dir() / 'app.ico'
-            if os.name == 'nt' and icon.exists():
-                self.iconbitmap(default=str(icon))
+            import logo_data
+            self._icons = logo_data.window_icons(self)
+            self.iconphoto(True, *self._icons)
         except tk.TclError:
             pass
 
